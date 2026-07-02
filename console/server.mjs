@@ -33,7 +33,8 @@ function handleRequest(dataDir, req, res) {
     }
     if (pathname === "/api/health") {
       // Side-effect-free: only counts run directories on disk.
-      const payload = { ok: true, service: "nightshift-console", runs: listRuns(dataDir).length };
+      // status: "ok" is the Deploy Guard api-check convention ($.status === "ok").
+      const payload = { ok: true, status: "ok", service: "nightshift-console", runs: listRuns(dataDir).length };
       return send(200, "application/json", JSON.stringify(payload));
     }
     const match = pathname.match(/^\/runs\/([^/]+)$/);

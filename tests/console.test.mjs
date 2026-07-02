@@ -71,7 +71,7 @@ test("/api/health returns the pinned shape", async () => {
   assert.equal(res.status, 200);
   assert.match(res.headers.get("content-type"), /application\/json/);
   const body = await res.json();
-  assert.deepEqual(body, { ok: true, service: "nightshift-console", runs: 1 });
+  assert.deepEqual(body, { ok: true, status: "ok", service: "nightshift-console", runs: 1 });
 });
 
 test("every response carries the four security headers (incl. 404)", async () => {
