@@ -176,7 +176,8 @@ Notes:
 - `budget.maxLlmCalls` / `maxMinutes` apply **per session**;
   `maxSessionsPerNight` and `stopAtHour` bound the `overnight` loop (a run
   starting at 23:00 with `stopAtHour: 6` runs through midnight and stops at
-  06:00).
+  06:00). `stopAtHour` is a morning hour, 0-11 — the overnight wrap has no
+  meaning for afternoon/evening values and the config loader rejects them.
 - `oracles.expectedStatuses` — statuses your app returns on purpose (auth
   probes) that should never be filed as bugs.
 - Point NightShift only at apps you own or are authorized to test.

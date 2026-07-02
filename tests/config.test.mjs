@@ -143,6 +143,18 @@ test("budget numbers are validated", () => {
   assert.equal(loadConfig(writeConfig(tmpDir(), { budget: { stopAtHour: 0 } })).budget.stopAtHour, 0);
 });
 
+test("budget.stopAtHour rejects afternoon/evening hours the midnight-wrap rule can never honor", () => {
+  // beforeStopHour()'s pinned wrap (stop while stopAtHour <= hour < 12) is
+  // unsatisfiable for 12-23: a buyer setting stopAtHour 22 would get sessions
+  // launching past 22:00 all night, silently. The loader must refuse.
+  for (const hour of [12, 13, 22, 23]) {
+    assertConfigError(() => loadConfig(writeConfig(tmpDir(), { budget: { stopAtHour: hour } })), /stopAtHour.*0-11/s);
+  }
+  for (const hour of [0, 6, 11]) {
+    assert.equal(loadConfig(writeConfig(tmpDir(), { budget: { stopAtHour: hour } })).budget.stopAtHour, hour);
+  }
+});
+
 test("reverify.requiredPasses cannot exceed reverify.replays", () => {
   assertConfigError(
     () => loadConfig(writeConfig(tmpDir(), { reverify: { replays: 2, requiredPasses: 3 } })),

@@ -189,6 +189,40 @@ function emptyStats() {
   };
 }
 
+// Overnight loop core (exported for tests). Per-session error containment is
+// load-bearing: one transient session crash at 3am (chromium.launch hiccup,
+// navigation racing a page call) must NOT discard the candidates earlier
+// sessions already collected — contain it, stop launching sessions, and let
+// the caller fall through to reverify + report with everything gathered so far.
+export async function collectOvernightFindings({ night, runOneSession, log }) {
+  const all = [];
+  const seenSignatures = new Set();
+  let stats = null;
+  let sessions = 0;
+  while (night.sessionAllowed(sessions) && night.beforeStopHour()) {
+    log("info", `overnight: starting session ${sessions + 1}`);
+    let result;
+    try {
+      result = await runOneSession();
+    } catch (e) {
+      log(
+        "error",
+        `overnight: session ${sessions + 1} crashed — keeping the ${all.length} candidate(s) from completed sessions: ` +
+          (e?.stack ?? String(e))
+      );
+      break;
+    }
+    for (const finding of result.findings) {
+      if (finding.signature && seenSignatures.has(finding.signature)) continue;
+      if (finding.signature) seenSignatures.add(finding.signature);
+      all.push(finding);
+    }
+    stats = mergeStats(stats, result.stats);
+    sessions++;
+  }
+  return { findings: all, stats, sessions };
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
@@ -244,28 +278,22 @@ async function cmdOvernight(flags) {
 
   const { createNightBudget } = await import("../lib/budget.mjs");
   const { createRun } = await import("../lib/runstore.mjs");
-  const { runSession } = await import("../lib/session.mjs");
+  const { runSession, createIdMinter } = await import("../lib/session.mjs");
   const night = createNightBudget(config.budget); // created ONCE for the whole night
 
   await withBrain(config, async (brain) => {
     const { runDir } = await createRun(config); // one run dir aggregates all sessions
-    const all = [];
-    const seenSignatures = new Set();
-    let stats = null;
-    let sessions = 0;
+    // ONE id minter for the whole night: the sessions share runDir, so a
+    // per-session counter would mint NS-001 twice — colliding screenshots,
+    // repro scripts, and report entries (misattributed evidence).
+    const mintId = createIdMinter();
 
     // runSession creates a fresh session budget from config.budget each call.
-    while (night.sessionAllowed(sessions) && night.beforeStopHour()) {
-      log("info", `overnight: starting session ${sessions + 1}`);
-      const result = await runSession({ config, brain, runDir, log });
-      for (const finding of result.findings) {
-        if (finding.signature && seenSignatures.has(finding.signature)) continue;
-        if (finding.signature) seenSignatures.add(finding.signature);
-        all.push(finding);
-      }
-      stats = mergeStats(stats, result.stats);
-      sessions++;
-    }
+    const { findings: all, stats, sessions } = await collectOvernightFindings({
+      night,
+      runOneSession: () => runSession({ config, brain, runDir, log, mintId }),
+      log,
+    });
     log("info", `overnight: ${sessions} session(s) complete — ${all.length} candidate(s), reverifying`);
 
     const { mdPath, findings: finals } = await reverifyAndReport({

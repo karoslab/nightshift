@@ -25,6 +25,9 @@ function makeServer() {
     if (p === "/api/slow") return void setTimeout(() => { res.writeHead(200); res.end("slow"); }, 400);
     if (p === "/missing.png") return void (res.writeHead(404), res.end());
     if (p === "/gone") return void (res.writeHead(404, { "content-type": "text/html" }), res.end("<h1>404</h1>"));
+    if (p === "/account") return void (res.writeHead(403, { "content-type": "text/html" }), res.end("<h1>login required</h1>"));
+    if (p === "/api/503") return void (res.writeHead(503), res.end("maintenance"));
+    if (p === "/old-docs") return void (res.writeHead(302, { location: "/gone" }), res.end());
     res.writeHead(200, { "content-type": "text/html" });
     res.end("<html><body>page</body></html>");
   });
@@ -250,4 +253,83 @@ test("dispose detaches all listeners", async () => {
   await page.waitForTimeout(300);
   assert.equal(oracles.events.length, 0);
   await context.close();
+});
+
+// --- fixes: findings review 2026-07-02 ---
+
+test("console oracle drops Chromium network-log entries (missing image / expected 401) — the network filters own those", async () => {
+  await withOracles(async (page, { events }) => {
+    // a missing <img> and an expected auth probe both emit
+    // "Failed to load resource: ..." console entries in Chromium
+    await page.evaluate(() => new Promise((resolve) => {
+      const img = document.createElement("img");
+      img.onerror = resolve;
+      img.src = "/missing.png";
+      document.body.append(img);
+    }));
+    await page.evaluate(() => fetch("/api/401").catch(() => {}));
+    await page.waitForTimeout(400);
+    assert.equal(ofOracle(events, "console-error").length, 0, JSON.stringify(events));
+    // and the network oracles stay quiet too (non-fetchy type / expected status)
+    assert.equal(ofOracle(events, "network-4xx").length, 0);
+  });
+});
+
+test("expectedStatuses suppress dead-link: a login-gated anchor landing on 403 is not a bug", async () => {
+  await withOracles(
+    async (page, { events }) => {
+      await page.goto(origin + "/account").catch(() => {});
+      await page.waitForTimeout(300);
+      assert.equal(ofOracle(events, "dead-link").length, 0, JSON.stringify(events));
+    },
+    { navAllowList: new Set(["/account"]) }, // harvested from a real anchor
+  );
+});
+
+test("expectedStatuses suppress network-5xx: a buyer-declared 503 never files", async () => {
+  await withOracles(
+    async (page, { events }) => {
+      await page.evaluate(() => fetch("/api/503").catch(() => {}));
+      await page.waitForTimeout(300);
+      assert.equal(ofOracle(events, "network-5xx").length, 0, JSON.stringify(events));
+    },
+    { oraclesConfig: { ...DEFAULT_ORACLES_CONFIG, expectedStatuses: [401, 403, 503] } },
+  );
+});
+
+test("dead-link allow-list keys on pathname+search: a harvested ?query anchor does not whitelist the bare pathname", async () => {
+  // real anchor /gone?id=1 harvested; the brain invents goto /gone -> silence
+  await withOracles(
+    async (page, { events }) => {
+      await page.goto(origin + "/gone").catch(() => {});
+      await page.waitForTimeout(300);
+      assert.equal(ofOracle(events, "dead-link").length, 0, JSON.stringify(events));
+    },
+    { navAllowList: new Set(["/gone?id=1"]) },
+  );
+  // while the harvested URL itself still fires
+  await withOracles(
+    async (page, { events }) => {
+      await page.goto(origin + "/gone?id=1").catch(() => {});
+      await eventually(() => ofOracle(events, "dead-link").length >= 1);
+      assert.equal(ofOracle(events, "dead-link").length, 1);
+    },
+    { navAllowList: new Set(["/gone?id=1"]) },
+  );
+});
+
+test("dead-link checks the redirect chain's ORIGINAL request: a real anchor redirecting to a 404 fires", async () => {
+  // <a href="/old-docs"> harvested; /old-docs 302-redirects to /gone (404).
+  // The final URL /gone is not in the allow-list — the anchor URL is what the
+  // list is about, so this genuinely broken link must still be reported.
+  await withOracles(
+    async (page, { events }) => {
+      await page.goto(origin + "/old-docs").catch(() => {});
+      await eventually(() => ofOracle(events, "dead-link").length >= 1);
+      const e = ofOracle(events, "dead-link")[0];
+      assert.equal(e.detail.status, 404);
+      assert.equal(e.detail.requestUrl, "/gone", "event detail keeps the FINAL landing URL");
+    },
+    { navAllowList: new Set(["/old-docs"]) },
+  );
 });

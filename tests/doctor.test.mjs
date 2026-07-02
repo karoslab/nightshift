@@ -123,6 +123,32 @@ test("doctor warns (does not fail) when ANTHROPIC_API_KEY is exported in subscri
   }
 });
 
+test("doctor warns about base-URL / Bedrock / Vertex routing overrides in subscription-cli mode", async () => {
+  // These reroute every turn away from the buyer's subscription just as an
+  // exported API key would flip billing — the doctor must surface them all.
+  const server = await listenEphemeral();
+  try {
+    const dir = tmpDir();
+    const configPath = writeConfig(dir, {
+      target: { url: `http://127.0.0.1:${server.address().port}` },
+      brain: { mode: "subscription-cli", cliPath: fakeCli(dir) },
+    });
+    const { ok, checks } = await runDoctor({
+      configPath,
+      env: { ANTHROPIC_BASE_URL: "https://corp-llm-proxy.example.com", CLAUDE_CODE_USE_BEDROCK: "1" },
+      launchChromium: stubChromium,
+    });
+    assert.equal(ok, true); // a warning never fails the doctor
+    const warn = check(checks, "env");
+    assert.equal(warn.status, "warn");
+    assert.match(warn.message, /ANTHROPIC_BASE_URL/);
+    assert.match(warn.message, /CLAUDE_CODE_USE_BEDROCK/);
+    assert.match(warn.message, /stripped from the CLI subprocess/);
+  } finally {
+    server.close();
+  }
+});
+
 test("doctor api-key mode: fails without the env var, passes with it, never prints it", async () => {
   const server = await listenEphemeral();
   try {

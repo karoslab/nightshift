@@ -147,6 +147,25 @@ test("buildSignature: normalization table", () => {
   }
 });
 
+test("buildSignature: console-error folds the failing source location into the subject", () => {
+  // Chromium reports the failing script/resource URL only in msg.location()
+  // (captured as detail.location "url:line"), never in the message text — two
+  // distinct sources with identical messages must stay two distinct bugs, or
+  // session dedupe merges them and reverify cross-confirms the wrong one.
+  const withLoc = (location) =>
+    consoleEvent({ message: "Uncaught TypeError: x is not a function", detail: { location } });
+  const a = buildSignature(withLoc("http://localhost:4185/js/cart.js:12"));
+  const b = buildSignature(withLoc("http://localhost:4185/js/deals.js:12"));
+  assert.notEqual(a, b, "distinct failing scripts must build distinct signatures");
+  assert.ok(a.includes("/js/cart.js"), a);
+  // deterministic across record/replay: same location -> same signature
+  assert.equal(a, buildSignature(withLoc("http://localhost:4185/js/cart.js:12")));
+  // the line number is churn, not identity — it is dropped
+  assert.equal(a, buildSignature(withLoc("http://localhost:4185/js/cart.js:99")));
+  // no location (detail {}) keeps the legacy page-pathname-only subject
+  assert.equal(buildSignature(consoleEvent({ message: "boom" })), "console-error|/shop|boom");
+});
+
 test("buildSignature: truncates to 200 chars and stays deterministic", () => {
   const long = consoleEvent({ message: "x".repeat(500) });
   const sig = buildSignature(long);

@@ -8,6 +8,19 @@
 
 import fs from "node:fs";
 
+// Every billing/routing var NightShift must strip (keep in sync with
+// STRIPPED_BILLING_ENV_VARS in lib/brain/claude-cli.mjs).
+const BILLING_VARS = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_BEDROCK_BASE_URL",
+  "ANTHROPIC_VERTEX_BASE_URL",
+  "ANTHROPIC_CUSTOM_HEADERS",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+];
+
 const sidecar = process.env.FAKE_CLAUDE_SIDECAR;
 if (sidecar) {
   fs.writeFileSync(
@@ -16,6 +29,7 @@ if (sidecar) {
       cwd: process.cwd(),
       hasApiKey: Object.prototype.hasOwnProperty.call(process.env, "ANTHROPIC_API_KEY"),
       hasAuthToken: Object.prototype.hasOwnProperty.call(process.env, "ANTHROPIC_AUTH_TOKEN"),
+      presentBillingVars: BILLING_VARS.filter((k) => Object.prototype.hasOwnProperty.call(process.env, k)),
       argv: process.argv.slice(2),
     }),
   );

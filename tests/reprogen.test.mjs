@@ -196,3 +196,26 @@ test("executed repro script: exit 0 when the bug fires, exit 1 when it does not"
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+// --- fixes: findings review 2026-07-02 ---
+
+test("generated script mirrors the oracle/check fixes from lib/oracles.mjs and lib/reverify.mjs", () => {
+  const script = generateReproScript(oracleFinding(), CONFIG);
+  // F11: Chromium network-log console entries are filtered in the embedded
+  // console listener too — otherwise a missing favicon would make the repro
+  // script exit 0 on a healthy app.
+  assert.match(script, /NETWORK_LOG_RE\s*=\s*\/\^Failed to load resource:\//);
+  assert.match(script, /if \(NETWORK_LOG_RE\.test\(text\)\) return;/);
+  // F15: console-error events must carry msg.location() so the embedded
+  // buildSignature builds the same location-keyed subject as the report.
+  assert.match(script, /msg\.location\(\)/);
+  assert.match(script, /loc\.url \+ ":" \+ loc\.lineNumber/);
+  // F12: expected statuses suppress every response oracle family (dead-link
+  // and network-5xx included), before any branch runs.
+  const respStart = script.indexOf('context.on("response"');
+  assert.ok(respStart !== -1, "generated script must attach a response listener");
+  const responseBlock = script.slice(respStart, script.indexOf('"dead-link"', respStart));
+  assert.match(responseBlock, /if \(expected\.has\(status\)\) return;/);
+  // F14: an unresolved selector must not vacuously reproduce a text-absent check.
+  assert.match(script, /if \(!resolved && check\.selector\) return \{ reproduced: false, excerpt: null \};/);
+});

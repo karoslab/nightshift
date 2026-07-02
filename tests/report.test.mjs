@@ -284,3 +284,93 @@ test("readRun rejects malformed / traversal run ids", (t) => {
 test("listRuns on a missing data dir returns []", () => {
   assert.deepEqual(listRuns(path.join(os.tmpdir(), "nightshift-definitely-missing-xyz")), []);
 });
+
+// --- fixes: findings review 2026-07-02 ---
+
+test("report.md neutralizes hostile page-derived strings (markdown/HTML injection)", (t) => {
+  const payload =
+    'boom\n\n## INJECTED HEADING\n\n[click me](http://evil.example)\n\n<img src=x onerror=alert(1)>\n\n```\nend';
+  const hostile = makeFinding({
+    id: "NS-009",
+    title: "line1\n## INJECTED TITLE HEADING",
+    failure: {
+      oracle: "console-error",
+      message: payload,
+      url: "http://127.0.0.1:4185/",
+      detail: {},
+      atStep: 1,
+      ts: 1700000000000,
+    },
+    semantic: { expected: "<b>bold</b> claims", actual: "[forged](http://evil.example) result" },
+    check: { kind: "text-present", selector: "#x", text: "<script>alert(1)</script>" },
+    trace: [
+      {
+        i: 0, kind: "click",
+        locator: { strategy: "role", role: "button", name: "Buy [now](http://evil.example) <img src=x onerror=alert(1)>", nth: 0 },
+        value: null, url: "http://127.0.0.1:4185/", postUrl: "http://127.0.0.1:4185/",
+        ok: true, error: null, tMs: 10, settle: { condition: "timeout", waitedMs: 0 },
+      },
+    ],
+    evidence: {
+      screenshot: "shots/NS-009.png",
+      consoleTail: ["[error] " + payload, "tick ``` tock"],
+      url: "http://127.0.0.1:4185/",
+      excerpt: "before <img src=x onerror=alert(1)> after",
+    },
+  });
+
+  const base = tmpBase(t);
+  const { runDir } = createRun({ report: { dir: base } });
+  const { mdPath } = writeReport(runDir, {
+    config: { target: { name: "Bugbox", url: "http://127.0.0.1:4185" } },
+    findings: [hostile],
+    stats: { usage: { inputTokens: 0, outputTokens: 0, costUsd: null } },
+    brainMeta: { mode: "mock", model: "scripted" },
+  });
+  const md = fs.readFileSync(mdPath, "utf8");
+
+  // no injected block elements: hostile text can never start a line as a heading
+  assert.ok(!/^## INJECTED/m.test(md), "injected heading rendered live");
+  // no inline HTML outside code fences (fenced blocks render literally, so
+  // the console-tail body may keep its raw text verbatim)
+  const outsideFences = md.replace(/^ {2}(`{3,})\n[\s\S]*?^ {2}\1$/gm, "");
+  assert.ok(!outsideFences.includes("<img"), "raw <img> tag leaked into report.md");
+  assert.ok(!outsideFences.includes("<script>"), "raw <script> tag leaked into report.md");
+  assert.ok(md.includes("&lt;img"), "angle brackets should be entity-encoded");
+  // no clickable forged links outside code fences
+  assert.ok(!outsideFences.includes("[click me](http://evil.example)"), "forged markdown link leaked");
+  assert.ok(!outsideFences.includes("[forged](http://evil.example)"), "forged markdown link leaked (semantic actual)");
+  assert.ok(!outsideFences.includes("[now](http://evil.example)"), "forged markdown link leaked (locator name)");
+  // console-tail fence integrity: the opening fence run must be longer than
+  // any backtick run in the hostile body, so the embedded ``` cannot close it
+  const fenceLines = (md.match(/^ {2}`+$/gm) ?? []).map((l) => l.trim());
+  assert.ok(fenceLines.length >= 2, "console tail fence missing");
+  const openLen = fenceLines[0].length;
+  assert.ok(openLen >= 4, `fence must outrun the embedded \`\`\` (got ${openLen})`);
+  assert.equal(fenceLines.at(-1).length, openLen, "closing fence must match the opening fence");
+  for (const inner of fenceLines.slice(1, -1)) {
+    assert.ok(inner.length < openLen, "hostile backtick run must stay strictly inside the fence");
+  }
+});
+
+test("writeReport writes repro scripts itself (static reprogen import — no version-dependent require)", (t) => {
+  // On Node 22.0-22.11 a createRequire() of the ESM reprogen threw
+  // ERR_REQUIRE_ESM and a bare catch silently wrote ZERO repro scripts.
+  // The import must be static, and the trust artifact must actually land.
+  const src = fs.readFileSync(new URL("../lib/report.mjs", import.meta.url), "utf8");
+  assert.ok(!src.includes("createRequire("), "lib/report.mjs must not require() the ESM reprogen");
+  assert.match(src, /^import \{ generateReproScript \} from "\.\/reprogen\.mjs";$/m, "reprogen must be a static import");
+
+  const base = tmpBase(t);
+  const { runDir } = createRun({ report: { dir: base } });
+  const confirmed = makeFinding({ id: "NS-021", reverify: { replays: 2, reproduced: 2, verdicts: ["reproduced", "reproduced"], minimized: false, reproScript: null } });
+  const { mdPath } = writeReport(runDir, {
+    config: { target: { name: "Bugbox", url: "http://127.0.0.1:4185" } },
+    findings: [confirmed],
+    stats: { usage: { inputTokens: 0, outputTokens: 0, costUsd: null } },
+    brainMeta: { mode: "mock", model: "scripted" },
+  });
+  assert.ok(fs.existsSync(path.join(runDir, "repro", "NS-021.mjs")), "repro/NS-021.mjs must be written");
+  const md = fs.readFileSync(mdPath, "utf8");
+  assert.ok(md.includes("repro/NS-021.mjs"), "report.md must reference the repro script");
+});

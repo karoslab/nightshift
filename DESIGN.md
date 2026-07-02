@@ -184,13 +184,22 @@ false positives kill the product):**
   click that navigates while fetches are in flight is normal, and it replays
   perfectly, so it would sail through reverify as a confirmed non-bug).
 - Statuses in `oracles.expectedStatuses` (default 401/403 — auth probes are
-  expected app behavior) never fire `network-4xx`.
+  expected app behavior) never fire ANY response oracle family: `network-4xx`,
+  `network-5xx`, or `dead-link` (a login-gated link landing on 403, or a
+  declared-expected 503, is not a bug).
 - Console messages matching any `oracles.ignoreConsole` regex are dropped
   (shipped defaults: ResizeObserver loop, HMR banners, React DevTools nag).
+- Chromium NETWORK-LOG console entries (`Failed to load resource: ...`) are
+  dropped by the console-error oracle: they would bypass the fetch/xhr-only
+  and expectedStatuses filters above (missing favicon → major console-error).
+  Failed loads are the network oracles' job, with their filters applied.
 - `dead-link` fires only when navigation lands on status >= 400 AND the
   destination came from a real anchor href or a configured seed route — never
   from a brain-invented free-form `goto` (the brain guessing /admin and getting
-  a 404 is not a bug in the buyer's app).
+  a 404 is not a bug in the buyer's app). The allow-list is keyed by
+  pathname+search (a harvested `/product?id=1` must not whitelist a
+  brain-invented `/product`) and is checked against the redirect chain's
+  ORIGINAL request URL, so a real anchor that redirects to a 404 still fires.
 
 ### Finding
 ```json
@@ -223,7 +232,11 @@ brain cannot express are unverifiable by definition.
   page URL would merge them and cross-confirm the wrong one). Page pathname
   stays in evidence only.
 - for `console-error` / `page-error` / `nav-failure` / semantic checks: the
-  page URL pathname.
+  page URL pathname. For `console-error` the pathname of the failing
+  script/resource (Chromium reports it only in `msg.location()`, captured as
+  `detail.location`, line number dropped) is folded into the subject — two
+  distinct sources with identical messages are two distinct bugs; merging them
+  would let reverify cross-confirm the wrong one.
 Normalization: lowercase; strip query strings; replace uuids, hex ids >= 8
 chars, timestamps, and all integers >= 3 digits with `#`; collapse whitespace;
 truncate 200 chars. `signaturesMatch(a, b) -> boolean` is exact string equality
@@ -273,11 +286,16 @@ with `stdio: ["ignore","pipe","pipe"]` and a 120s inactivity kill.
    vidi-chat reference). With an empty temp cwd there are no project settings
    either: clean slate. (The buyer's own CLI auth/login of course still
    applies — that is the point of the mode.)
-3. Child env strips billing overrides in subscription mode:
-   `env: {...process.env, ANTHROPIC_API_KEY: undefined, ANTHROPIC_AUTH_TOKEN:
-   undefined}` — an exported ANTHROPIC_API_KEY would otherwise silently flip
-   the CLI to metered API billing, the exact surprise the two-mode design
-   exists to prevent.
+3. Child env strips ALL billing/routing overrides in subscription mode (the
+   pinned list is `STRIPPED_BILLING_ENV_VARS` in claude-cli.mjs:
+   ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL,
+   ANTHROPIC_BEDROCK_BASE_URL, ANTHROPIC_VERTEX_BASE_URL,
+   ANTHROPIC_CUSTOM_HEADERS, CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_USE_VERTEX)
+   — an exported ANTHROPIC_API_KEY would silently flip the CLI to metered API
+   billing, and an inherited base-URL/Bedrock/Vertex setting would silently
+   reroute every turn to a non-Anthropic endpoint or a cloud account: the
+   exact billing-surprise and phone-home outcomes the two-mode design and the
+   telemetry guarantee exist to prevent. doctor warns on any of them.
 
 Parses the single JSON result object (`{result, usage, total_cost_usd,
 is_error}` — verified shape on CLI 2.1.195) — and parses stdout even when the
@@ -317,15 +335,19 @@ Two scopes, two factories (pure, injectable clock for tests):
   -> boolean, beforeStopHour() -> boolean }` — created ONCE by `overnight`.
   `beforeStopHour()` wraps midnight: false when `hour >= stopAtHour && hour <
   12`, true otherwise (a run starting 23:00 with stopAtHour 6 runs through
-  midnight and stops at 06:00).
+  midnight and stops at 06:00). This formula only expresses MORNING stop
+  hours, so config.mjs validates `stopAtHour` as 0-11 — for 12-23 the stop
+  window would be empty and the setting silently ignored.
 
 ### lib/elements.mjs / lib/explorer.mjs / lib/session.mjs (agent B)
 - `enumerateElements(page, max=30) -> ElementDescriptor[]` — visible, enabled
   interactive elements (button/link/input/select/textarea + role=button/link),
   deduped, stable ordering (document order).
-- `executeAction(page, action, elements) -> TraceStep` — maps the brain Action
-  to a TraceStep (resolving elementId → locator descriptor, same-origin guard
-  on goto) and delegates execution to `executeStep`. Never throws (failure
+- `executeAction(page, action, elements, {origin}?) -> TraceStep` — maps the
+  brain Action to a TraceStep (resolving elementId → locator descriptor,
+  same-origin guard on goto — validated against the configured target `origin`
+  when provided, since the current page may be foreign after an external-link
+  click) and delegates execution to `executeStep`. Never throws (failure
   recorded in the step).
 - `executeStep(page, step, {navTimeoutMs}) -> {ok, error, settle}` — lives in
   **lib/trace.mjs next to resolveLocator and is the ONLY code that performs a
@@ -337,14 +359,26 @@ Two scopes, two factories (pure, injectable clock for tests):
   Explorer and reverify both call it; reprogen inlines its logic verbatim into
   generated scripts. Recording and replay share one execution path — they
   cannot diverge.
-- `runSession({config, brain, runDir, log}) -> { findings: Finding[], stats }` —
-  the orchestrator: launch chromium (headless), fresh context, attach oracles,
-  visit seed routes; per page loop: enumerate → buildTurnPrompt → brain.ask →
-  execute action → collect FailureEvents → snapshot findings (screenshot at
-  detection); respects budget on every brain call; dedupes candidates
-  in-session by signature; discovered same-origin links append to the route
-  frontier up to maxRoutes. Returns candidates (status "candidate") — session
-  does NOT reverify; caller wires that (separation keeps replay LLM-free).
+- `runSession({config, brain, runDir, log, mintId?}) -> { findings: Finding[],
+  stats }` — the orchestrator: launch chromium (headless), fresh context,
+  attach oracles, visit seed routes; per page loop: enumerate → buildTurnPrompt
+  → brain.ask → execute action → collect FailureEvents → snapshot findings
+  (screenshot at detection); respects budget on every brain call; dedupes
+  candidates in-session by signature; discovered same-origin links append to
+  the route frontier up to maxRoutes. Returns candidates (status "candidate")
+  — session does NOT reverify; caller wires that (separation keeps replay
+  LLM-free). Hardening rules (pinned):
+  - `mintId` (optional, `createIdMinter()` default) mints NS-nnn ids; the
+    overnight loop passes ONE shared minter so ids/screenshots/repro paths
+    never collide across sessions aggregating into one run dir.
+  - each route ends with a 2s oracle grace + final drain (mirrors reverify's
+    GRACE_MS) so a slow failing response from the route's last action attaches
+    to the trace that triggered it, and it runs even when the budget ends the
+    session mid-route.
+  - `executeAction` receives the TARGET origin: goto is validated against it
+    (not the current page, which may be foreign), and after any action that
+    leaves the page off-origin the session records a recovery goto back to the
+    route instead of exploring the foreign site.
 
 ### lib/reverify.mjs / lib/reprogen.mjs (agent C)
 - `reverifyFinding(finding, {config, log}) -> Finding` — for each of
@@ -357,7 +391,11 @@ Two scopes, two factories (pure, injectable clock for tests):
   case-SENSITIVE substring match on `innerText` of the selector's element (or
   the full body when selector is null — last resort); the brain is instructed
   to supply the fullest stable fragment ("Total: NaN", never bare "NaN", which
-  would match "Banana"); the matched excerpt ±80 chars is recorded as evidence.**
+  would match "Banana"); the matched excerpt ±80 chars is recorded as evidence.
+  A non-null selector that resolves NOTHING proves nothing — the replay is
+  not-reproduced (a typo'd/renamed selector must not vacuously confirm a
+  text-absent check on a healthy page; absence-of-element bugs use
+  selector:null body scope).**
   Verdict per replay: "reproduced" | "not-reproduced" | "replay-broken" (a step
   itself failed to execute — e.g. element gone). Status: reproduced count >=
   requiredPasses → `confirmed`; some but < required → `flaky`; zero → `unconfirmed`;
@@ -383,7 +421,13 @@ Two scopes, two factories (pure, injectable clock for tests):
   title, severity badge, status, numbered ENGLISH repro steps derived from the
   trace, evidence excerpts, path to repro script + screenshot). Confirmed bugs
   first; flaky/unconfirmed/unverifiable in labelled sections. Header states
-  brain mode/model + token usage + the softened positioning line.
+  brain mode/model + token usage + the softened positioning line. Markdown is
+  a rendering context: every string that originated in the page under test
+  (console text, element names, excerpts, URLs, fill values) is neutralized —
+  newlines flattened, angle brackets entity-encoded, link brackets escaped,
+  code fences sized to outrun any embedded backtick run — mirroring the
+  console's escapeHtml discipline. reprogen is imported STATICALLY (require()
+  of ESM only works on Node >= 22.12 while engines allows >= 22).
 - `console/server.mjs`: `nightshift console` / `node console/server.mjs` —
   localhost:4184, zero deps. Routes: `/` (landing: product one-liner with the
   SOFTENED pitch + compliance bullets + run list), `/runs/<id>` (rendered
@@ -433,7 +477,10 @@ Commands (plain argv parsing, no deps):
   candidate → report; prints summary table + report path. Exit 0 (clean run
   regardless of bugs found; bugs are the product, not an error), 2 on crash.
 - `nightshift overnight` — sessions in a loop while budget.sessionAllowed &&
-  before stopAtHour; aggregates into one run dir; same reporting.
+  before stopAtHour; aggregates into one run dir (one shared finding-id
+  minter); same reporting. Per-session error containment: a session crash is
+  logged and stops the loop, but the candidates from completed sessions are
+  ALWAYS reverified and reported — one 3am hiccup must not discard the night.
 - `nightshift verify <findingId> [--run <id>]` — re-run reverify for one
   finding from an existing report (buyer-facing trust command).
 - `nightshift console [--port 4184]` — start the report console.

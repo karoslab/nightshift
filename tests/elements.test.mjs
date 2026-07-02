@@ -125,3 +125,15 @@ test("accessible name preference: aria-label beats text; label beats placeholder
     ],
   );
 });
+
+test("a navigation racing page.evaluate degrades to an empty table, never throws", async () => {
+  // "Execution context was destroyed, most likely because of a navigation" —
+  // the one per-turn page call that used to escape every try/catch and kill
+  // the whole session (and, overnight, discard all candidates found so far).
+  const stubPage = {
+    evaluate: async () => {
+      throw new Error("Execution context was destroyed, most likely because of a navigation");
+    },
+  };
+  assert.deepEqual(await enumerateElements(stubPage), []);
+});

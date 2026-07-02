@@ -168,3 +168,42 @@ test("executeAction: maps elementId to locator, records failures, guards cross-o
   assert.equal(unknown.ok, false);
   assert.match(unknown.error, /unknown action kind/);
 });
+
+test("executeAction: goto guard validates against the TARGET origin, not a foreign current page", async () => {
+  // After a click on an external anchor the page itself is off-origin. Judged
+  // by the page's origin, "/foo" would roam DEEPER into the foreign site while
+  // the absolute goto back to the app would be refused as "cross-origin".
+  const gotoCalls = [];
+  const stubPage = {
+    url: () => "https://accounts.google.com/signin",
+    goto: async (u) => void gotoCalls.push(u),
+    waitForLoadState: async () => {},
+    waitForTimeout: async () => {},
+  };
+  const targetOrigin = "http://127.0.0.1:3000";
+
+  const roam = await executeAction(stubPage, { kind: "goto", url: "/foo" }, [], { origin: targetOrigin });
+  assert.equal(roam.ok, true, "relative goto resolves against the TARGET origin, not the foreign page");
+  assert.deepEqual(gotoCalls, [targetOrigin + "/foo"], "must navigate back into the app under test");
+  gotoCalls.length = 0;
+
+  const foreignAbs = await executeAction(
+    stubPage,
+    { kind: "goto", url: "https://accounts.google.com/deeper" },
+    [],
+    { origin: targetOrigin },
+  );
+  assert.equal(foreignAbs.ok, false, "roaming deeper into the foreign site must be blocked");
+  assert.match(foreignAbs.error, /goto blocked/);
+  assert.deepEqual(gotoCalls, []);
+
+  const home = await executeAction(stubPage, { kind: "goto", url: targetOrigin + "/" }, [], { origin: targetOrigin });
+  assert.equal(home.ok, true, "the one goto that returns to the app under test must pass");
+  assert.deepEqual(gotoCalls, [targetOrigin + "/"], "absolute same-target goto navigates home");
+
+  // and with the page ON-origin, relative paths still resolve against the page
+  const onOriginPage = { ...stubPage, url: () => targetOrigin + "/shop" };
+  const rel = await executeAction(onOriginPage, { kind: "goto", url: "/cart" }, [], { origin: targetOrigin });
+  assert.equal(rel.ok, true);
+  assert.equal(gotoCalls.at(-1), targetOrigin + "/cart");
+});

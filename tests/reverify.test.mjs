@@ -13,6 +13,7 @@ let onceHits = 0; // /api/once 500s only on its first hit — deterministic flak
 const PAGES = {
   "/bug": `<html><body><h1>Shop</h1>
     <button onclick="fetch('/api/flaky')">Load deals</button></body></html>`,
+  "/discount": `<html><body><div class="discount-banner">Discount applied</div></body></html>`,
   "/flaky-once": `<html><body>
     <button onclick="fetch('/api/once')">Load deals</button></body></html>`,
   "/healthy": `<html><body><h1>Fine</h1>
@@ -184,6 +185,29 @@ test("semantic text-present match -> confirmed with ±80-char excerpt evidence",
   assert.ok(out.evidence.excerpt.includes("Total: NaN"), "excerpt contains the matched text");
   assert.ok(out.evidence.excerpt.includes("Grand"), "excerpt keeps surrounding context");
   assert.ok(out.evidence.excerpt.includes("(coupon applied)"), "excerpt keeps trailing context");
+});
+
+test("text-absent with a selector that resolves nothing is NOT vacuously reproduced", async () => {
+  // The page is healthy and literally contains "Discount applied" — in
+  // .discount-banner, not #discount-banner. A brain typo (or renamed element)
+  // must not mint a CONFIRMED bug out of an unresolved selector: the element's
+  // nonexistence proves nothing about the text being absent.
+  const finding = semanticFinding({
+    trace: [gotoStep(0, "/discount")],
+    check: { kind: "text-absent", selector: "#discount-banner", text: "Discount applied" },
+    url: origin + "/discount",
+  });
+  const out = await reverifyFinding(finding, { config: makeConfig(), log: quietLog });
+  assert.equal(out.status, "unconfirmed");
+  assert.deepEqual(out.reverify.verdicts, ["not-reproduced", "not-reproduced"]);
+  // while a RESOLVED selector whose text truly lacks the fragment still reproduces
+  const legit = semanticFinding({
+    trace: [gotoStep(0, "/banana")],
+    check: { kind: "text-absent", selector: "#total", text: "Discount applied" },
+    url: origin + "/banana",
+  });
+  const outLegit = await reverifyFinding(legit, { config: makeConfig(), log: quietLog });
+  assert.equal(outLegit.status, "confirmed");
 });
 
 test("checkless semantic finding -> unverifiable without replaying", async () => {

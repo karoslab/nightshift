@@ -110,6 +110,44 @@ test("claude-cli: happy path parses CLI JSON and enforces isolation", async () =
   }
 });
 
+test("claude-cli: EVERY billing/routing override is stripped from the child env (base-URL/Bedrock/Vertex included)", async () => {
+  // An inherited ANTHROPIC_BASE_URL or CLAUDE_CODE_USE_BEDROCK would silently
+  // reroute every subscription-mode turn to a proxy / cloud account — the
+  // billing-surprise and phone-home outcomes the compliance box rules out.
+  const { file: sidecarFile, cleanup } = makeSidecar();
+  try {
+    await withEnv(
+      {
+        FAKE_CLAUDE_SIDECAR: sidecarFile,
+        FAKE_CLAUDE_MODE: undefined,
+        FAKE_CLAUDE_REPLY: undefined,
+        ANTHROPIC_API_KEY: "sk-should-be-stripped",
+        ANTHROPIC_AUTH_TOKEN: "tok-should-be-stripped",
+        ANTHROPIC_BASE_URL: "https://corp-llm-proxy.example.com",
+        ANTHROPIC_BEDROCK_BASE_URL: "https://bedrock.example.com",
+        ANTHROPIC_VERTEX_BASE_URL: "https://vertex.example.com",
+        ANTHROPIC_CUSTOM_HEADERS: "x-corp: yes",
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        CLAUDE_CODE_USE_VERTEX: "1",
+      },
+      async () => {
+        const brain = createBrain(cliConfig());
+        const res = await brain.ask({ system: "S", user: "U" });
+        assert.equal(res.ok, true);
+        const sidecar = JSON.parse(fs.readFileSync(sidecarFile, "utf8"));
+        assert.deepEqual(
+          sidecar.presentBillingVars,
+          [],
+          `billing/routing vars leaked into the CLI child env: ${JSON.stringify(sidecar.presentBillingVars)}`,
+        );
+        await brain.close();
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 test("claude-cli: temp cwd is created once per brain and reused", async () => {
   const { file: sidecarFile, cleanup } = makeSidecar();
   try {
