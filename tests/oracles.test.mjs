@@ -28,6 +28,12 @@ function makeServer() {
     if (p === "/account") return void (res.writeHead(403, { "content-type": "text/html" }), res.end("<h1>login required</h1>"));
     if (p === "/api/503") return void (res.writeHead(503), res.end("maintenance"));
     if (p === "/old-docs") return void (res.writeHead(302, { location: "/gone" }), res.end());
+    // 400 validation responses for the auth-400 suppression tests
+    if (p === "/api/auth/signup") return void (res.writeHead(400), res.end("bad fields"));
+    if (p === "/api/items") return void (res.writeHead(400), res.end("bad"));
+    if (p === "/api/authors") return void (res.writeHead(400), res.end("bad"));
+    if (p === "/api/auth/probe") return void (res.writeHead(403), res.end("no"));
+    if (p === "/api/auth/missing") return void (res.writeHead(404), res.end("nope"));
     res.writeHead(200, { "content-type": "text/html" });
     res.end("<html><body>page</body></html>");
   });
@@ -316,6 +322,53 @@ test("dead-link allow-list keys on pathname+search: a harvested ?query anchor do
     },
     { navAllowList: new Set(["/gone?id=1"]) },
   );
+});
+
+// --- fixes: false-positive review 2026-07-04 (NS-001 auth-400 validation) ---
+
+test("network-4xx: a 400 from an auth endpoint is validation, not a bug — suppressed", async () => {
+  // hernudge's POST /api/auth/signup returns 400 when required fields are empty
+  // (the server correctly rejecting bad input). That is not a bug in the app.
+  await withOracles(async (page, { events }) => {
+    await page.evaluate(() => fetch("/api/auth/signup", { method: "POST" }).catch(() => {}));
+    await page.waitForTimeout(400);
+    assert.equal(ofOracle(events, "network-4xx").length, 0, JSON.stringify(events));
+  });
+});
+
+test("network-4xx: a 400 from a NON-auth endpoint still fires (suppression is narrow)", async () => {
+  await withOracles(async (page, { events }) => {
+    await page.evaluate(() => fetch("/api/items", { method: "POST" }).catch(() => {}));
+    await eventually(() => ofOracle(events, "network-4xx").length >= 1);
+    const errs = ofOracle(events, "network-4xx");
+    assert.equal(errs.length, 1);
+    assert.equal(errs[0].detail.status, 400);
+    assert.equal(errs[0].detail.requestUrl, "/api/items");
+  });
+});
+
+test("network-4xx: /api/authors is not an auth endpoint — its 400 still fires (regex precision)", async () => {
+  // the AUTH_PATH_RE `s?` must not let "authors" ride on the "auth" branch
+  await withOracles(async (page, { events }) => {
+    await page.evaluate(() => fetch("/api/authors", { method: "POST" }).catch(() => {}));
+    await eventually(() => ofOracle(events, "network-4xx").length >= 1);
+    assert.equal(ofOracle(events, "network-4xx").length, 1);
+    assert.equal(ofOracle(events, "network-4xx")[0].detail.requestUrl, "/api/authors");
+  });
+});
+
+test("auth 401/403 behavior unchanged: expectedStatuses still suppress, no 400 crossover", async () => {
+  // 403 on an auth endpoint is suppressed by expectedStatuses (unchanged);
+  // a genuine auth 404 (not 400, not expected) still fires — the auth-400 gate
+  // is scoped to status 400 only.
+  await withOracles(async (page, { events }) => {
+    await page.evaluate(() => fetch("/api/auth/probe").catch(() => {})); // 403, expected
+    await page.evaluate(() => fetch("/api/auth/missing").catch(() => {})); // 404, /api/auth/missing not a real route -> auth path but 404
+    await eventually(() => ofOracle(events, "network-4xx").length >= 1);
+    const errs = ofOracle(events, "network-4xx");
+    assert.equal(errs.length, 1, JSON.stringify(events));
+    assert.equal(errs[0].detail.status, 404, "auth-endpoint 404 still fires; only 400 is suppressed");
+  });
 });
 
 test("dead-link checks the redirect chain's ORIGINAL request: a real anchor redirecting to a 404 fires", async () => {

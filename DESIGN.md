@@ -200,6 +200,14 @@ false positives kill the product):**
   pathname+search (a harvested `/product?id=1` must not whitelist a
   brain-invented `/product`) and is checked against the redirect chain's
   ORIGINAL request URL, so a real anchor that redirects to a 404 still fires.
+- A fetch/xhr **400 against an auth-shaped endpoint** (`AUTH_PATH_RE`:
+  auth/login/signup/register/password/reset/verify/session/… as a path
+  segment) never fires `network-4xx`: a 400 there is the server correctly
+  rejecting invalid input (empty signup fields, malformed email), not a bug.
+  Narrowly scoped — only status 400, only the fetch/xhr family (a 400 DOCUMENT
+  dead-link on an auth page still fires), and the regex is precise (`/api/authors`
+  and `/blog/password-tips` do NOT match). Distinct from `expectedStatuses`,
+  which already covers 401/403 for every response family.
 
 ### Finding
 ```json
@@ -400,6 +408,19 @@ Two scopes, two factories (pure, injectable clock for tests):
   itself failed to execute — e.g. element gone). Status: reproduced count >=
   requiredPasses → `confirmed`; some but < required → `flaky`; zero → `unconfirmed`;
   all replays replay-broken → `unverifiable`.
+- **Nav-only control (text-present static-copy guard):** a brain-proposed
+  `text-present` check can name text that is ALWAYS on the page (a headline/CTA
+  like "Open the planner"), so it "reproduces" on any healthy load and an
+  interaction trace proves nothing. When a `text-present` finding reproduces AND
+  its trace contains a real interaction (kind ∉ {goto, back}), reverify runs a
+  control: fresh context, replay ONLY the goto/back steps through the same
+  `executeStep` path, same 2s grace, then `evaluateCheck`. If the check also
+  matches on the control the text is static page copy → the reproduced verdicts
+  become "control-matched" (finding NOT confirmed, excerpt dropped). Goto-only
+  traces skip the control (it would equal the replay — a bug visible on plain
+  load, like the demo-app "Deals unavailable right now.", must still confirm);
+  `text-absent` checks are unaffected. Mirrored verbatim into the generated
+  repro script (parity-tested end-to-end).
 - **Minimization** (v1, deterministic): before final replays, try the shortest
   suffix of the trace that starts at the most recent `goto` step; if that
   suffix reproduces once, adopt it as `finding.trace` and set `minimized: true`.

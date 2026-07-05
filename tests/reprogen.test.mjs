@@ -219,3 +219,73 @@ test("generated script mirrors the oracle/check fixes from lib/oracles.mjs and l
   // F14: an unresolved selector must not vacuously reproduce a text-absent check.
   assert.match(script, /if \(!resolved && check\.selector\) return \{ reproduced: false, excerpt: null \};/);
 });
+
+// --- fixes: false-positive review 2026-07-04 (auth-400 + static-copy control) ---
+
+test("generated script embeds the AUTH_PATH_RE 400 gate (lib/oracles.mjs parity)", () => {
+  const script = generateReproScript(oracleFinding(), CONFIG);
+  // the regex must survive the template literal byte-identical to lib/oracles.mjs
+  assert.match(script, /const AUTH_PATH_RE = \/\(\^\|\\\/\)\(auth\|login\|log-in\|signin\|sign-in\|signup\|sign-up\|register\|password\|forgot\|reset\|verify\|otp\|credentials\|session\)s\?\(\\\/\|\$\)\/i;/);
+  assert.match(script, /if \(status === 400 && AUTH_PATH_RE\.test\(pathnameOf\(response\.url\(\)\)\)\) return;/);
+});
+
+test("generated script embeds the nav-only control for text-present findings (lib/reverify.mjs parity)", () => {
+  const script = generateReproScript(semanticFinding(), CONFIG);
+  assert.match(script, /const hasInteraction = TRACE\.some\(\(s\) => s\.kind !== "goto" && s\.kind !== "back"\);/);
+  assert.match(script, /if \(reproduced && CHECK && CHECK\.kind === "text-present" && hasInteraction\)/);
+  assert.match(script, /control-matched: check text present without interactions \(static page copy\)/);
+});
+
+test("executed repro script: static-copy text-present exits 1, interaction-caused exits 0", { timeout: 120_000 }, async () => {
+  const server = http.createServer((req, res) => {
+    const pathname = req.url.split("?")[0];
+    if (pathname === "/signup") {
+      // "Open the planner" is the page's own headline — present on plain load
+      return void (res.writeHead(200, { "content-type": "text/html" }),
+        res.end(`<html><body><h1>Open the planner</h1>
+          <button onclick="document.title='x'">Get started</button></body></html>`));
+    }
+    // /reveal injects "Total: NaN" ONLY on the click
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end(`<html><body><div id="out"></div>
+      <button onclick="document.getElementById('out').textContent='Total: NaN'">Apply coupon</button></body></html>`);
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const origin = "http://127.0.0.1:" + server.address().port;
+  const dir = path.join(ROOT, "node_modules", ".cache", `ns-reprogen-${crypto.randomUUID()}`);
+  await fs.mkdir(dir, { recursive: true });
+  try {
+    const config = { ...CONFIG, target: { ...CONFIG.target, url: origin } };
+
+    // static page copy + an interaction step: the nav-only control matches, so
+    // the generated script must NOT reproduce -> exit 1.
+    const staticCopy = {
+      ...semanticFinding(origin),
+      check: { kind: "text-present", selector: null, text: "Open the planner" },
+      signature: buildSignature({ kind: "text-present", selector: null, text: "Open the planner", url: origin + "/signup" }),
+      trace: [gotoStep(0, origin + "/signup"), clickStep(1, "Get started", origin + "/signup")],
+    };
+    const staticPath = path.join(dir, "static.mjs");
+    await fs.writeFile(staticPath, generateReproScript(staticCopy, config));
+    const staticRes = await run(process.execPath, [staticPath]);
+    assert.equal(staticRes.code, 1, `static copy must exit 1:\n${staticRes.stdout}\n${staticRes.stderr}`);
+    assert.match(staticRes.stdout, /^NOT REPRODUCED NS-002 /m);
+    assert.match(staticRes.stderr, /control-matched/);
+
+    // interaction-caused text: the nav-only control finds nothing -> exit 0.
+    const caused = {
+      ...semanticFinding(origin),
+      check: { kind: "text-present", selector: "#out", text: "Total: NaN" },
+      signature: buildSignature({ kind: "text-present", selector: "#out", text: "Total: NaN", url: origin + "/reveal" }),
+      trace: [gotoStep(0, origin + "/reveal"), clickStep(1, "Apply coupon", origin + "/reveal")],
+    };
+    const causedPath = path.join(dir, "caused.mjs");
+    await fs.writeFile(causedPath, generateReproScript(caused, config));
+    const causedRes = await run(process.execPath, [causedPath]);
+    assert.equal(causedRes.code, 0, `interaction-caused bug must exit 0:\n${causedRes.stdout}\n${causedRes.stderr}`);
+    assert.match(causedRes.stdout, /^REPRODUCED NS-002 /m);
+  } finally {
+    await new Promise((r) => server.close(r));
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

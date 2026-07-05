@@ -126,6 +126,55 @@ test("accessible name preference: aria-label beats text; label beats placeholder
   );
 });
 
+// --- fixes: false-positive review 2026-07-04 (NS-001 recorder accname case) ---
+
+test("CSS text-transform:uppercase label keeps DOM casing (getByRole round-trips)", async () => {
+  // hernudge's .field-label renders "Your name" as "YOUR NAME" (text-transform).
+  // innerText is CSS-rendered, so the old innerText||textContent path recorded
+  // "YOUR NAME" — but getByRole matches the spec accname from DOM text, so the
+  // replay locator getByRole('textbox', {name:'YOUR NAME', exact:true}) timed
+  // out, the form submitted empty, and the server's correct 400 got mis-filed.
+  await page.setContent(`
+    <style>.field-label { text-transform: uppercase; }</style>
+    <label class="field-label" for="nm">Your name</label>
+    <input id="nm" type="text">
+  `);
+  const els = await enumerateElements(page);
+  assert.equal(els.length, 1);
+  assert.equal(els[0].name, "Your name", "recorded name must be DOM case, not the CSS-rendered 'YOUR NAME'");
+  // round-trip: the recorded name resolves the input via the spec accname
+  const loc = page.getByRole("textbox", { name: els[0].name, exact: true });
+  assert.equal(await loc.count(), 1);
+  await loc.fill("x");
+  assert.equal(await page.locator("#nm").inputValue(), "x");
+});
+
+test("button styled uppercase keeps DOM casing in its accessible name", async () => {
+  // buttons take the element-text fallback path (not the label path) — the
+  // domText helper must apply there too.
+  await page.setContent(`
+    <style>button { text-transform: uppercase; }</style>
+    <button>Save changes</button>
+  `);
+  const els = await enumerateElements(page);
+  assert.equal(els.length, 1);
+  assert.equal(els[0].name, "Save changes");
+  assert.equal(await page.getByRole("button", { name: "Save changes", exact: true }).count(), 1);
+});
+
+test("hidden-content still excluded when the difference is NOT case-only", async () => {
+  // A display:none span inside the label changes the text beyond case, so the
+  // case-only shortcut does NOT fire — innerText (hidden-content filtered) wins,
+  // matching the spec accname, which drops the hidden "SECRET".
+  await page.setContent(`
+    <label for="e2">Work email <span style="display:none">SECRET</span></label>
+    <input id="e2" type="email">
+  `);
+  const els = await enumerateElements(page);
+  assert.equal(els.length, 1);
+  assert.equal(els[0].name, "Work email", "display:none text must be excluded (innerText path)");
+});
+
 test("a navigation racing page.evaluate degrades to an empty table, never throws", async () => {
   // "Execution context was destroyed, most likely because of a navigation" —
   // the one per-turn page call that used to escape every try/catch and kill

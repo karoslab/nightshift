@@ -21,6 +21,13 @@ const PAGES = {
   "/banana": `<html><body><div id="total">Banana</div></body></html>`,
   "/nan": `<html><body><div id="total">Grand Total: NaN (coupon applied)</div></body></html>`,
   "/hub": `<html><body><p>nothing interesting here</p></body></html>`,
+  // static-copy: "Open the planner" is the page's own headline/CTA — present on
+  // plain load, so any interaction "reproduces" a text-present check for it.
+  "/signup": `<html><body><h1>Open the planner</h1>
+    <button onclick="document.title='clicked'">Get started</button></body></html>`,
+  // interaction-caused: the buggy text is injected ONLY after the click.
+  "/reveal": `<html><body><div id="out"></div>
+    <button onclick="document.getElementById('out').textContent='Total: NaN'">Apply coupon</button></body></html>`,
 };
 
 before(async () => {
@@ -185,6 +192,66 @@ test("semantic text-present match -> confirmed with ±80-char excerpt evidence",
   assert.ok(out.evidence.excerpt.includes("Total: NaN"), "excerpt contains the matched text");
   assert.ok(out.evidence.excerpt.includes("Grand"), "excerpt keeps surrounding context");
   assert.ok(out.evidence.excerpt.includes("(coupon applied)"), "excerpt keeps trailing context");
+});
+
+// --- fixes: false-positive review 2026-07-04 (NS-002 static-copy control) ---
+
+test("text-present matching STATIC page copy + an interaction trace -> NOT confirmed (control-matched)", async () => {
+  // "Open the planner" is /signup's own headline. A brain:semantic finding with
+  // an interaction step "reproduces" on every replay — but the nav-only control
+  // also finds it, proving it is static copy, not caused by the click.
+  const finding = semanticFinding({
+    trace: [gotoStep(0, "/signup"), clickStep(1, "Get started", "/signup")],
+    check: { kind: "text-present", selector: null, text: "Open the planner" },
+    url: origin + "/signup",
+  });
+  const out = await reverifyFinding(finding, { config: makeConfig(), log: quietLog });
+  assert.notEqual(out.status, "confirmed");
+  assert.deepEqual(out.reverify.verdicts, ["control-matched", "control-matched"]);
+  assert.equal(out.reverify.reproduced, 0);
+  assert.equal(out.status, "unconfirmed");
+  assert.equal(out.evidence.excerpt, undefined, "static-copy excerpt must not be presented as evidence");
+});
+
+test("goto-only trace with text visible on load -> still confirmed (NS-003 protection, no control)", async () => {
+  // A bug visible on plain load (demo-app "Deals unavailable right now.") has a
+  // goto-only trace; the control would equal the replay, so it is skipped and
+  // the finding confirms.
+  const finding = semanticFinding({
+    trace: [gotoStep(0, "/nan")],
+    check: { kind: "text-present", selector: "#total", text: "Total: NaN" },
+    url: origin + "/nan",
+  });
+  const out = await reverifyFinding(finding, { config: makeConfig(), log: quietLog });
+  assert.equal(out.status, "confirmed");
+  assert.deepEqual(out.reverify.verdicts, ["reproduced", "reproduced"]);
+});
+
+test("text-present that appears ONLY after the interaction -> still confirmed (control must not kill real bugs)", async () => {
+  // /reveal injects "Total: NaN" only on the Apply-coupon click. The nav-only
+  // control (goto alone) finds nothing, so the reproductions stand.
+  const finding = semanticFinding({
+    trace: [gotoStep(0, "/reveal"), clickStep(1, "Apply coupon", "/reveal")],
+    check: { kind: "text-present", selector: "#out", text: "Total: NaN" },
+    url: origin + "/reveal",
+  });
+  const out = await reverifyFinding(finding, { config: makeConfig(), log: quietLog });
+  assert.equal(out.status, "confirmed", "interaction-caused text must still confirm");
+  assert.deepEqual(out.reverify.verdicts, ["reproduced", "reproduced"]);
+  assert.ok(out.evidence.excerpt.includes("Total: NaN"));
+});
+
+test("text-absent checks are unaffected by the control (control only guards text-present)", async () => {
+  // sanity: a text-absent finding with an interaction trace never triggers the
+  // control path (its verdicts stay reproduced/confirmed as before).
+  const finding = semanticFinding({
+    trace: [gotoStep(0, "/signup"), clickStep(1, "Get started", "/signup")],
+    check: { kind: "text-absent", selector: null, text: "Discount applied" },
+    url: origin + "/signup",
+  });
+  const out = await reverifyFinding(finding, { config: makeConfig(), log: quietLog });
+  assert.equal(out.status, "confirmed");
+  assert.deepEqual(out.reverify.verdicts, ["reproduced", "reproduced"]);
 });
 
 test("text-absent with a selector that resolves nothing is NOT vacuously reproduced", async () => {
