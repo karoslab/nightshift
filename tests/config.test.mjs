@@ -14,6 +14,8 @@ const PINNED_DEFAULTS = {
     routes: ["/"],
     maxRoutes: 12,
     actionsPerPage: 6,
+    selectorDenylist: [],
+    denyActionKinds: [],
   },
   brain: {
     mode: "subscription-cli",
