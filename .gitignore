@@ -2,6 +2,10 @@ node_modules/
 .nightshift/
 ops/logs/
 .DS_Store
+GTM/
+.nightshift-*/
+undefined/
+UNDERSTOOD-*.md
 
 # secret files
 .env
