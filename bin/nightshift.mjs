@@ -118,7 +118,7 @@ const brainMeta = (config, brain) => ({
 async function reverifyAndReport({ config, findings, stats, brainMeta: meta, runDir, log }) {
   const { reverifyFinding } = await import("../lib/reverify.mjs");
   const { generateReproScript } = await import("../lib/reprogen.mjs");
-  const { writeReport } = await import("../lib/report.mjs");
+  const { writeReport, computeRunState } = await import("../lib/report.mjs");
 
   const finals = [];
   for (const candidate of findings) {
@@ -135,16 +135,28 @@ async function reverifyAndReport({ config, findings, stats, brainMeta: meta, run
   }
 
   const { jsonPath, mdPath } = await writeReport(runDir, { config, findings: finals, stats, brainMeta: meta });
-  return { jsonPath, mdPath, findings: finals };
+  return { jsonPath, mdPath, findings: finals, runState: computeRunState(stats) };
 }
 
-function printSummary(findings, mdPath) {
+// runState "failed"/"inconclusive" means meaningful exploration did not
+// happen (brain turns mostly failed, or the session never executed a single
+// action) — a zero-finding report in that case is not a "clean run", it's a
+// run that produced no evidence either way, and must not read like a pass.
+export function exitCodeForRunState(runState) {
+  return runState === "failed" || runState === "inconclusive" ? 1 : 0;
+}
+
+function printSummary(findings, mdPath, runState) {
   const pad = (s, n) => String(s).padEnd(n);
   console.log("");
   console.log("NightShift findings");
   console.log("-------------------");
   if (findings.length === 0) {
-    console.log("(none — clean run)");
+    if (exitCodeForRunState(runState) !== 0) {
+      console.log(`(no findings — run state: ${runState}, exploration did not complete; see report.json for stats)`);
+    } else {
+      console.log("(none — clean run)");
+    }
   }
   const counts = {};
   for (const f of findings) {
@@ -162,6 +174,8 @@ function mergeStats(a, b) {
     routesVisited: a.routesVisited + b.routesVisited,
     actionsExecuted: a.actionsExecuted + b.actionsExecuted,
     llmCalls: a.llmCalls + b.llmCalls,
+    turnsOk: (a.turnsOk ?? 0) + (b.turnsOk ?? 0),
+    turnsFailed: (a.turnsFailed ?? 0) + (b.turnsFailed ?? 0),
     startedAt: a.startedAt,
     endedAt: b.endedAt,
     durationMs: a.durationMs + b.durationMs,
@@ -182,6 +196,8 @@ function emptyStats() {
     routesVisited: 0,
     actionsExecuted: 0,
     llmCalls: 0,
+    turnsOk: 0,
+    turnsFailed: 0,
     startedAt: now,
     endedAt: now,
     durationMs: 0,
@@ -259,7 +275,7 @@ async function cmdRun(flags) {
     log("info", `run: starting session against ${config.target.url}`);
     const { findings, stats } = await runSession({ config, brain, runDir, log });
     log("info", `run: session done — ${findings.length} candidate(s), reverifying`);
-    const { mdPath, findings: finals } = await reverifyAndReport({
+    const { mdPath, findings: finals, runState } = await reverifyAndReport({
       config,
       findings,
       stats,
@@ -267,9 +283,11 @@ async function cmdRun(flags) {
       runDir,
       log,
     });
-    printSummary(finals, mdPath);
+    printSummary(finals, mdPath, runState);
+    process.exitCode = exitCodeForRunState(runState);
   });
-  // exit 0 regardless of bugs found — bugs are the product, not an error
+  // exit 0 regardless of bugs found — bugs are the product, not an error.
+  // Nonzero only when runState says exploration itself didn't happen.
 }
 
 async function cmdOvernight(flags) {
@@ -296,7 +314,7 @@ async function cmdOvernight(flags) {
     });
     log("info", `overnight: ${sessions} session(s) complete — ${all.length} candidate(s), reverifying`);
 
-    const { mdPath, findings: finals } = await reverifyAndReport({
+    const { mdPath, findings: finals, runState } = await reverifyAndReport({
       config,
       findings: all,
       stats: stats ?? emptyStats(),
@@ -304,7 +322,8 @@ async function cmdOvernight(flags) {
       runDir,
       log,
     });
-    printSummary(finals, mdPath);
+    printSummary(finals, mdPath, runState);
+    process.exitCode = exitCodeForRunState(runState);
   });
 }
 
@@ -440,7 +459,7 @@ async function cmdDemo() {
       const { runSession } = await import("../lib/session.mjs");
       const { runDir } = await createRun(config);
       const { findings, stats } = await runSession({ config, brain, runDir, log });
-      const { mdPath, findings: finals } = await reverifyAndReport({
+      const { mdPath, findings: finals, runState } = await reverifyAndReport({
         config,
         findings,
         stats,
@@ -448,7 +467,8 @@ async function cmdDemo() {
         runDir,
         log,
       });
-      printSummary(finals, mdPath);
+      printSummary(finals, mdPath, runState);
+      process.exitCode = exitCodeForRunState(runState);
       log("info", "demo: repro scripts replay against the demo port — restart Bugbox on that port to rerun them");
     });
   } finally {

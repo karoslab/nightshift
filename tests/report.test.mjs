@@ -12,6 +12,7 @@ import {
   groupFindings,
   describeStep,
   countsByStatus,
+  computeRunState,
 } from "../lib/report.mjs";
 import {
   createRun,
@@ -216,6 +217,33 @@ test("groupFindings and countsByStatus agree, confirmed group first", () => {
   assert.equal(counts.flaky, 1);
   assert.equal(counts.unconfirmed, 1);
   assert.equal(counts.unverifiable, 1);
+});
+
+test("computeRunState: healthy/degraded/failed/inconclusive from turn success ratio and actionsExecuted", () => {
+  assert.equal(computeRunState({ llmCalls: 4, turnsOk: 4, actionsExecuted: 3 }), "healthy");
+  assert.equal(computeRunState({ llmCalls: 4, turnsOk: 3, actionsExecuted: 3 }), "degraded");
+  assert.equal(computeRunState({ llmCalls: 4, turnsOk: 1, actionsExecuted: 1 }), "failed", "below 50% turn success is failed");
+  assert.equal(computeRunState({ llmCalls: 4, turnsOk: 0, actionsExecuted: 0 }), "inconclusive", "zero successful turns and zero actions is inconclusive");
+  assert.equal(computeRunState({ llmCalls: 0, turnsOk: 0, actionsExecuted: 0 }), "inconclusive", "no turns attempted at all");
+  assert.equal(computeRunState({ llmCalls: 4, turnsOk: 4, actionsExecuted: 0 }), "inconclusive", "turns ok but nothing was ever explored");
+});
+
+test("writeReport persists runState in report.json and report.md", (t) => {
+  const base = tmpBase(t);
+  const { runDir } = createRun({ report: { dir: base } });
+  const { jsonPath, mdPath } = writeReport(runDir, {
+    config: { target: { name: "Bugbox", url: "http://127.0.0.1:4185" } },
+    findings: [],
+    stats: {
+      routesVisited: 1, actionsExecuted: 2, llmCalls: 4, turnsOk: 1, turnsFailed: 3,
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: null },
+    },
+    brainMeta: { mode: "mock", model: "scripted" },
+  });
+  const parsed = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+  assert.equal(parsed.runState, "failed");
+  const md = fs.readFileSync(mdPath, "utf8");
+  assert.match(md, /Run state: \*\*failed\*\*/);
 });
 
 // --- runstore ---

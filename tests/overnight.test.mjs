@@ -4,12 +4,14 @@
 // isMain guard keeps main() from running under the test runner.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { collectOvernightFindings } from "../bin/nightshift.mjs";
+import { collectOvernightFindings, exitCodeForRunState } from "../bin/nightshift.mjs";
 
 const makeStats = () => ({
   routesVisited: 1,
   actionsExecuted: 2,
   llmCalls: 3,
+  turnsOk: 3,
+  turnsFailed: 0,
   startedAt: "2026-07-02T03:00:00.000Z",
   endedAt: "2026-07-02T03:10:00.000Z",
   durationMs: 600_000,
@@ -38,6 +40,8 @@ test("a session crash at 3am keeps the candidates earlier sessions collected", a
     "earlier candidates kept, duplicate signature deduped",
   );
   assert.equal(out.stats.llmCalls, 6, "stats merged across the completed sessions");
+  assert.equal(out.stats.turnsOk, 6, "turnsOk merged across the completed sessions");
+  assert.equal(out.stats.turnsFailed, 0, "turnsFailed merged across the completed sessions");
   assert.ok(
     logs.some(([level, message]) => level === "error" && /crashed/.test(message) && /EAGAIN/.test(message)),
     "the crash must be logged, not swallowed: " + JSON.stringify(logs),
@@ -72,4 +76,11 @@ test("the loop still respects the night budget and stop hour", async () => {
   hourOk = false;
   const stopped = await collectOvernightFindings({ night, runOneSession, log: () => {} });
   assert.equal(stopped.sessions, 0, "past the stop hour no session launches");
+});
+
+test("exitCodeForRunState: nonzero only for failed/inconclusive, zero for healthy/degraded", () => {
+  assert.equal(exitCodeForRunState("healthy"), 0);
+  assert.equal(exitCodeForRunState("degraded"), 0);
+  assert.equal(exitCodeForRunState("failed"), 1);
+  assert.equal(exitCodeForRunState("inconclusive"), 1);
 });

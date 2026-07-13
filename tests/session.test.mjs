@@ -91,6 +91,24 @@ function scriptedBrain(script) {
   };
 }
 
+// Scripted brain where some replies are `null` (brain.ask ok:false — mirrors
+// a malformed-JSON reply from lib/brain/mock.mjs's extractJson).
+function flakyBrain(script) {
+  const queue = [...script];
+  return {
+    mode: "mock",
+    model: "scripted",
+    async ask() {
+      const reply = queue.length > 0 ? queue.shift() : { action: null, findings: [], done: true };
+      if (reply === null) {
+        return { ok: false, json: null, rawText: "not json", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } };
+      }
+      return { ok: true, json: reply, rawText: JSON.stringify(reply), usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } };
+    },
+    async close() {},
+  };
+}
+
 const quietLog = () => {};
 
 function tmpRunDir(t) {
@@ -191,4 +209,22 @@ test("a harvested ?query anchor does not whitelist a brain-invented goto to the 
   });
   const deadLinks = findings.filter((f) => f.source === "oracle:dead-link");
   assert.deepEqual(deadLinks, [], "brain-invented goto 404 must never file dead-link: " + JSON.stringify(findings.map((f) => f.title)));
+});
+
+test("stats count successful vs failed brain turns instead of only logging-and-continuing", { timeout: 60_000 }, async (t) => {
+  const brain = flakyBrain([
+    { action: null, findings: [], done: false },
+    null,
+    null,
+    { action: null, findings: [], done: true },
+  ]);
+  const { stats } = await runSession({
+    config: makeConfig(["/"], { actionsPerPage: 4 }),
+    brain,
+    runDir: tmpRunDir(t),
+    log: quietLog,
+  });
+  assert.equal(stats.llmCalls, 4, "every attempted turn is still counted in llmCalls");
+  assert.equal(stats.turnsOk, 2, "two turns returned ok:true");
+  assert.equal(stats.turnsFailed, 2, "two turns returned ok:false");
 });
