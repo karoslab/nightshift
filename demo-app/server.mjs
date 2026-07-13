@@ -110,7 +110,15 @@ function handleRequest(req, res) {
     res.end(body);
   };
   const { pathname } = new URL(req.url, "http://127.0.0.1");
-  if (pathname === "/") return send(200, "text/html; charset=utf-8", PAGE_HOME);
+  if (pathname === "/") {
+    // Seeded security fixture (opt-in `security.enabled` loadout only, never
+    // read by the default functional session): a session cookie with none of
+    // Secure/HttpOnly/SameSite set, and no security headers at all — Bugbox
+    // exercises the same false-positive discipline for security checks that
+    // it does for functional oracles.
+    res.setHeader("Set-Cookie", "bugbox_session=demo; Path=/");
+    return send(200, "text/html; charset=utf-8", PAGE_HOME);
+  }
   if (pathname === "/about") return send(200, "text/html; charset=utf-8", PAGE_ABOUT);
   if (pathname === "/api/flaky") {
     // Seeded bug 2: always 500, deterministically.

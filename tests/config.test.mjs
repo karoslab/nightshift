@@ -37,6 +37,12 @@ const PINNED_DEFAULTS = {
   },
   reverify: { replays: 2, requiredPasses: 2, navTimeoutMs: 15000 },
   report: { dir: ".nightshift" },
+  security: {
+    enabled: false,
+    scope: { origins: [] },
+    checks: ["*"],
+    severityFloor: "minor",
+  },
 };
 
 function tmpDir() {
@@ -236,6 +242,40 @@ test("target.denyActionKinds rejects unknown action kinds", () => {
   );
   const ok = loadConfig(writeConfig(tmpDir(), { target: { denyActionKinds: ["fill", "press", "select"] } }));
   assert.deepEqual(ok.target.denyActionKinds, ["fill", "press", "select"]);
+});
+
+test("security.enabled defaults false; zero behavior change until flipped", () => {
+  const config = inDir(tmpDir(), () => loadConfig());
+  assert.equal(config.security.enabled, false);
+  assert.deepEqual(config.security.scope, { origins: [] });
+  assert.deepEqual(config.security.checks, ["*"]);
+  assert.equal(config.security.severityFloor, "minor");
+});
+
+test("security.enabled must be a boolean", () => {
+  assertConfigError(() => loadConfig(writeConfig(tmpDir(), { security: { enabled: "yes" } })), /security\.enabled/);
+});
+
+test("security.scope.origins must be bare origins, not paths", () => {
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { security: { scope: { origins: ["https://cdn.example/lib.js"] } } })),
+    /security\.scope\.origins/,
+  );
+  const ok = loadConfig(writeConfig(tmpDir(), { security: { scope: { origins: ["https://cdn.example"] } } }));
+  assert.deepEqual(ok.security.scope.origins, ["https://cdn.example"]);
+});
+
+test("security.checks rejects unknown check ids", () => {
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { security: { checks: ["not-a-real-check"] } })),
+    /security\.checks/,
+  );
+  const ok = loadConfig(writeConfig(tmpDir(), { security: { checks: ["missing-security-headers"] } }));
+  assert.deepEqual(ok.security.checks, ["missing-security-headers"]);
+});
+
+test("security.severityFloor must be minor|major|critical", () => {
+  assertConfigError(() => loadConfig(writeConfig(tmpDir(), { security: { severityFloor: "low" } })), /severityFloor/);
 });
 
 test("two loads never share mutable state", () => {
