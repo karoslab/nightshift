@@ -83,11 +83,14 @@ test("e2e: full pipeline against Bugbox proves real bugs and stays quiet on /abo
       );
     }
 
-    // The Total: NaN semantic finding, confirmed via its text-present check.
+    // The Total: NaN semantic finding, text-verified via its text-present
+    // check — a text assertion proves presence/absence only, so it gets its
+    // own tier rather than "confirmed" (reserved for deterministic oracle
+    // signatures).
     const nan = findings.find((f) => f.source === "brain:semantic" && /total:\s*nan/i.test(f.signature ?? ""));
     assert.ok(nan, `semantic Total: NaN finding missing; findings: ${JSON.stringify(findings.map((f) => [f.source, f.signature]))}`);
     assert.ok(String(nan.signature).startsWith("text-present|"), `semantic signature not check-keyed: ${nan.signature}`);
-    assert.equal(nan.status, "confirmed", `semantic NaN finding not confirmed: ${JSON.stringify(nan.reverify)}`);
+    assert.equal(nan.status, "text-verified", `semantic NaN finding not text-verified: ${JSON.stringify(nan.reverify)}`);
 
     // ZERO findings for /about — the false-positive canary.
     for (const f of findings) {
@@ -97,8 +100,9 @@ test("e2e: full pipeline against Bugbox proves real bugs and stays quiet on /abo
       }
     }
 
-    // Every confirmed finding's repro script exits 0 while Bugbox is still up.
-    for (const f of confirmed) {
+    // Every confirmed (or text-verified) finding's repro script exits 0 while
+    // Bugbox is still up.
+    for (const f of [...confirmed, nan]) {
       const rel = f.reverify?.reproScript;
       assert.ok(rel, `confirmed finding ${f.id} has no reproScript`);
       const scriptPath = path.isAbsolute(rel) ? rel : path.join(runDir, rel);

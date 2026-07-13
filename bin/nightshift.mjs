@@ -114,7 +114,7 @@ const brainMeta = (config, brain) => ({
   model: brain.model ?? config.brain.model,
 });
 
-// candidates -> reverify each -> repro script for confirmed/flaky -> writeReport
+// candidates -> reverify each -> repro script for confirmed/text-verified/flaky -> writeReport
 async function reverifyAndReport({ config, findings, stats, brainMeta: meta, runDir, log }) {
   const { reverifyFinding } = await import("../lib/reverify.mjs");
   const { generateReproScript } = await import("../lib/reprogen.mjs");
@@ -123,7 +123,7 @@ async function reverifyAndReport({ config, findings, stats, brainMeta: meta, run
   const finals = [];
   for (const candidate of findings) {
     const finding = await reverifyFinding(candidate, { config, log });
-    if (finding.status === "confirmed" || finding.status === "flaky") {
+    if (finding.status === "confirmed" || finding.status === "text-verified" || finding.status === "flaky") {
       const source = await generateReproScript(finding, config);
       const rel = path.join("repro", `${finding.id}.mjs`);
       await fs.mkdir(path.join(runDir, "repro"), { recursive: true });
@@ -371,7 +371,7 @@ async function cmdVerify(flags, positionals) {
   const rv = verified.reverify ?? {};
   console.log(`${verified.id}: ${verified.status} (${rv.reproduced ?? "?"}/${rv.replays ?? "?"} replays reproduced)`);
   if (Array.isArray(rv.verdicts)) console.log(`verdicts: ${rv.verdicts.join(", ")}`);
-  process.exitCode = verified.status === "confirmed" ? 0 : 1;
+  process.exitCode = verified.status === "confirmed" || verified.status === "text-verified" ? 0 : 1;
 }
 
 async function cmdConsole(flags) {

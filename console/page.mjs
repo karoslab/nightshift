@@ -56,6 +56,7 @@ const STYLE = `
   .sev-major { background: #3a2a10; color: #ecc07a; }
   .sev-minor { background: #17222e; color: #92b6d8; }
   .st-confirmed { background: #10281a; color: #7fd3a1; }
+  .st-text-verified { background: #102428; color: #7fc4d3; }
   .st-flaky { background: #2c2410; color: #d8bd76; }
   .st-unconfirmed { background: #1c2027; color: #9aa3b2; }
   .st-unverifiable { background: #241a2a; color: #c1a3d6; }
@@ -204,6 +205,7 @@ ${g.findings.map(findingCard).join("\n")}`
 </p>
 <p class="pitch">${escapeHtml(POSITIONING_LINE)}</p>
 <p><strong>${escapeHtml(String(counts.confirmed ?? 0))} confirmed</strong> ·
+${escapeHtml(String(counts["text-verified"] ?? 0))} text-verified ·
 ${escapeHtml(String(counts.flaky ?? 0))} flaky ·
 ${escapeHtml(String(counts.unconfirmed ?? 0))} unconfirmed ·
 ${escapeHtml(String(counts.unverifiable ?? 0))} unverifiable</p>

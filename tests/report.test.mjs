@@ -208,6 +208,48 @@ test("describeStep covers every action kind in plain English", () => {
   );
 });
 
+test("text-verified findings get their own section, ordered after confirmed, with an honest caveat", (t) => {
+  const findings = [
+    ...fixtureFindings(),
+    makeFinding({
+      id: "NS-005", status: "text-verified", severity: "major",
+      title: "Discount banner missing after checkout",
+      source: "brain:semantic",
+      failure: null,
+      semantic: { expected: "no discount banner", actual: "banner still shown" },
+      check: { kind: "text-absent", selector: null, text: "Discount applied" },
+    }),
+  ];
+  const base = tmpBase(t);
+  const { runId, runDir } = createRun({ report: { dir: base } });
+  const out = writeReport(runDir, {
+    config: { target: { name: "Bugbox", url: "http://127.0.0.1:4185" } },
+    findings,
+    stats: { usage: {}, routesVisited: 1, actionsExecuted: 3, llmCalls: 1, durationMs: 1000 },
+    brainMeta: { mode: "test", model: "test" },
+  });
+  const md = fs.readFileSync(out.mdPath, "utf8");
+  const idx = (s) => {
+    const i = md.indexOf(s);
+    assert.ok(i !== -1, `missing: ${s}`);
+    return i;
+  };
+  const confirmed = idx("## Confirmed bugs");
+  const textVerified = idx("## Text-verified");
+  const flaky = idx("## Flaky");
+  assert.ok(confirmed < textVerified && textVerified < flaky, "text-verified sits between confirmed and flaky");
+  assert.ok(idx("### NS-005") > textVerified);
+  assert.ok(
+    md.includes(
+      "Caveat: verified by a text substring check only — this confirms the text was " +
+        "(or was not) present, not ordering, counts, or correctness beyond that."
+    )
+  );
+  const parsed = JSON.parse(fs.readFileSync(out.jsonPath, "utf8"));
+  assert.equal(parsed.counts["text-verified"], 1);
+  assert.equal(parsed.counts.confirmed, 1);
+});
+
 test("groupFindings and countsByStatus agree, confirmed group first", () => {
   const groups = groupFindings(fixtureFindings());
   assert.deepEqual(groups.map((g) => g.status), ["confirmed", "flaky", "unconfirmed", "unverifiable"]);

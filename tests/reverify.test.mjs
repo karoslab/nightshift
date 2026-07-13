@@ -180,14 +180,14 @@ test('semantic check is case-SENSITIVE: "NaN" and "Total: NaN" never match "Bana
   }
 });
 
-test("semantic text-present match -> confirmed with ±80-char excerpt evidence", async () => {
+test("semantic text-present match -> text-verified with ±80-char excerpt evidence", async () => {
   const finding = semanticFinding({
     trace: [gotoStep(0, "/nan")],
     check: { kind: "text-present", selector: "#total", text: "Total: NaN" },
     url: origin + "/nan",
   });
   const out = await reverifyFinding(finding, { config: makeConfig(), log: quietLog });
-  assert.equal(out.status, "confirmed");
+  assert.equal(out.status, "text-verified");
   assert.equal(out.reverify.reproduced, 2);
   assert.ok(out.evidence.excerpt.includes("Total: NaN"), "excerpt contains the matched text");
   assert.ok(out.evidence.excerpt.includes("Grand"), "excerpt keeps surrounding context");
@@ -213,7 +213,7 @@ test("text-present matching STATIC page copy + an interaction trace -> NOT confi
   assert.equal(out.evidence.excerpt, undefined, "static-copy excerpt must not be presented as evidence");
 });
 
-test("goto-only trace with text visible on load -> still confirmed (NS-003 protection, no control)", async () => {
+test("goto-only trace with text visible on load -> still text-verified (NS-003 protection, no control)", async () => {
   // A bug visible on plain load (demo-app "Deals unavailable right now.") has a
   // goto-only trace; the control would equal the replay, so it is skipped and
   // the finding confirms.
@@ -223,11 +223,11 @@ test("goto-only trace with text visible on load -> still confirmed (NS-003 prote
     url: origin + "/nan",
   });
   const out = await reverifyFinding(finding, { config: makeConfig(), log: quietLog });
-  assert.equal(out.status, "confirmed");
+  assert.equal(out.status, "text-verified");
   assert.deepEqual(out.reverify.verdicts, ["reproduced", "reproduced"]);
 });
 
-test("text-present that appears ONLY after the interaction -> still confirmed (control must not kill real bugs)", async () => {
+test("text-present that appears ONLY after the interaction -> still text-verified (control must not kill real bugs)", async () => {
   // /reveal injects "Total: NaN" only on the Apply-coupon click. The nav-only
   // control (goto alone) finds nothing, so the reproductions stand.
   const finding = semanticFinding({
@@ -236,7 +236,7 @@ test("text-present that appears ONLY after the interaction -> still confirmed (c
     url: origin + "/reveal",
   });
   const out = await reverifyFinding(finding, { config: makeConfig(), log: quietLog });
-  assert.equal(out.status, "confirmed", "interaction-caused text must still confirm");
+  assert.equal(out.status, "text-verified", "interaction-caused text must still verify");
   assert.deepEqual(out.reverify.verdicts, ["reproduced", "reproduced"]);
   assert.ok(out.evidence.excerpt.includes("Total: NaN"));
 });
@@ -250,7 +250,7 @@ test("text-absent checks are unaffected by the control (control only guards text
     url: origin + "/signup",
   });
   const out = await reverifyFinding(finding, { config: makeConfig(), log: quietLog });
-  assert.equal(out.status, "confirmed");
+  assert.equal(out.status, "text-verified");
   assert.deepEqual(out.reverify.verdicts, ["reproduced", "reproduced"]);
 });
 
@@ -274,7 +274,7 @@ test("text-absent with a selector that resolves nothing is NOT vacuously reprodu
     url: origin + "/banana",
   });
   const outLegit = await reverifyFinding(legit, { config: makeConfig(), log: quietLog });
-  assert.equal(outLegit.status, "confirmed");
+  assert.equal(outLegit.status, "text-verified");
 });
 
 test("checkless semantic finding -> unverifiable without replaying", async () => {
@@ -298,6 +298,27 @@ test("recorded element gone on every replay -> replay-broken -> unverifiable", a
   const out = await reverifyFinding(finding, { config: makeConfig(), log: quietLog });
   assert.equal(out.status, "unverifiable");
   assert.deepEqual(out.reverify.verdicts, ["replay-broken", "replay-broken"]);
+});
+
+test("verdict tiering: oracle signature -> confirmed, semantic text check -> text-verified", async () => {
+  // Same replay outcome (reproduced on every replay), different claim: an
+  // oracle signature match IS the full claim (a network 500 happened), while
+  // a text-present/text-absent check only proves a substring's presence at
+  // one instant — it must not be presented under the same "confirmed" label.
+  const oracle = oracleFinding({
+    trace: [gotoStep(0, "/bug"), clickStep(1, "Load deals", "/bug")],
+    event: flakyEvent("/api/flaky"),
+  });
+  const semantic = semanticFinding({
+    trace: [gotoStep(0, "/nan")],
+    check: { kind: "text-present", selector: "#total", text: "Total: NaN" },
+    url: origin + "/nan",
+  });
+  const oracleOut = await reverifyFinding(oracle, { config: makeConfig(), log: quietLog });
+  const semanticOut = await reverifyFinding(semantic, { config: makeConfig(), log: quietLog });
+  assert.equal(oracleOut.status, "confirmed");
+  assert.equal(semanticOut.status, "text-verified");
+  assert.notEqual(semanticOut.status, "confirmed", "a text assertion must not be labeled confirmed");
 });
 
 test("minimization: suffix from the last goto is adopted when it reproduces", async () => {
