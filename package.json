@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "The overnight QA employee you run on your own machine, with your own Claude. Explores your web app, finds bugs, and only files the ones it can deterministically reproduce.",
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "private": true,
   "bin": {
     "nightshift": "bin/nightshift.mjs"

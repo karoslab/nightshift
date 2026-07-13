@@ -135,6 +135,26 @@ compliance in both modes — see [TERMS.md](TERMS.md).
 5. **Telemetry: none.** NightShift makes no network calls except to the target
    app under test and (in api-key mode) api.anthropic.com.
 
+## What gets sent to the model
+
+Every brain turn sends the current page state as plain text to the model, no
+more and no less:
+
+- the page URL and title
+- a numbered table of interactive elements (role, accessible name, tag,
+  disabled/editable state) — not full page HTML
+- a page text excerpt, capped at 1500 characters
+- recent failure messages from the oracles (e.g. a console error or a 5xx
+  response) for the current page
+- the list of URLs visited so far this session
+
+In `subscription-cli` mode (the default), this turn text is sent to the
+`claude` CLI already installed and logged into on your machine, so it goes
+through your own Claude account exactly as if you had typed it yourself. In
+`api-key` mode it is sent directly to `api.anthropic.com` under your own API
+key. See [Two ways to bring the brain](#two-ways-to-bring-the-brain) and
+[TERMS.md](TERMS.md).
+
 ## Configuration
 
 `nightshift init` writes this file; every key shown is the default:
@@ -194,6 +214,11 @@ runs the whole pipeline with the scripted mock brain, and asserts confirmed
 findings for a page crash, a 500ing API, a dead link, and a `Total: NaN`
 semantic check — plus zero findings on Bugbox's clean `/about` page, and that
 every confirmed finding's repro script exits 0.
+
+## Maintenance
+
+NightShift is a personal project, maintained as time allows. PRs and issues
+are welcome, but review may be slow.
 
 ## Terms
 

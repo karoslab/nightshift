@@ -23,9 +23,16 @@ pointing NightShift at anything.
 
 ## 2. What NightShift touches — and what it never touches
 
-- NightShift executes **100% locally** on your machine. There is no hosted
-  component, no account pooling, and no shared credential of any kind. The
-  bundled report console binds to 127.0.0.1 only.
+- NightShift's **execution and storage are 100% local** to your machine: the
+  browser, the run store, and the report console all run on your box only.
+  There is no hosted component, no account pooling, and no shared credential
+  of any kind. The bundled report console binds to 127.0.0.1 only.
+- Page content IS processed by a model, under your own account. Every brain
+  turn sends page state (URL, title, element names, up to 1500 characters of
+  page text, recent failure messages, visited URLs) to the model — in
+  `subscription-cli` mode via your own logged-in `claude` CLI, in `api-key`
+  mode directly to `api.anthropic.com` under your own key. See
+  [What gets sent to the model](README.md#what-gets-sent-to-the-model).
 - NightShift **never reads, stores, logs, or transmits** OAuth tokens, API
   keys, or any file under `~/.claude/`. In `api-key` mode, your key is read
   from your environment variable at call time and sent only to
