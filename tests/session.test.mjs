@@ -13,6 +13,7 @@ let serverA;
 let originA;
 let serverB;
 let originB;
+let serverBHits;
 
 const PAGES_A = {
   "/": `<html><body><h1>Home</h1><button onclick="fetch('/api/slow500')">Boom</button></body></html>`,
@@ -55,6 +56,7 @@ before(async () => {
     res.end(html.replace("__B__", originB));
   });
   serverB = http.createServer((req, res) => {
+    serverBHits += 1;
     res.writeHead(200, { "content-type": "text/html" });
     res.end("<html><body><h1>Foreign</h1><a href=\"/deeper\">Deeper</a></body></html>");
   });
@@ -167,6 +169,33 @@ test("a click that navigates off-origin recovers to the target app instead of bu
     !brain.turns[1].includes(originB),
     "the foreign page must not be offered to the brain for further actions",
   );
+});
+
+test("a click on an external anchor is intercepted before the foreign origin is ever requested", { timeout: 60_000 }, async (t) => {
+  serverBHits = 0;
+  const brain = scriptedBrain([
+    { action: { kind: "click", elementId: 0, why: "follow the partner link" }, findings: [], done: false },
+    { action: null, findings: [], done: true },
+  ]);
+  await runSession({
+    config: makeConfig(["/external"], { actionsPerPage: 2 }),
+    brain,
+    runDir: tmpRunDir(t),
+    log: quietLog,
+  });
+  assert.equal(serverBHits, 0, "the foreign origin must never receive a request from the intercepted click");
+});
+
+test("a harvested cross-origin anchor is never enqueued as a route to visit", { timeout: 60_000 }, async (t) => {
+  serverBHits = 0;
+  const brain = scriptedBrain([{ action: null, findings: [], done: true }]);
+  await runSession({
+    config: makeConfig(["/external"], { maxRoutes: 5, actionsPerPage: 1 }),
+    brain,
+    runDir: tmpRunDir(t),
+    log: quietLog,
+  });
+  assert.equal(serverBHits, 0, "a cross-origin anchor on the page must never be visited as a harvested route");
 });
 
 test("overnight sessions sharing a run dir share the id minter: no NS-nnn collisions", { timeout: 60_000 }, async (t) => {

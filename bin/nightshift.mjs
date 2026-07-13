@@ -91,8 +91,33 @@ function demoMockScript() {
 // ---------------------------------------------------------------------------
 // Shared pipeline plumbing
 // ---------------------------------------------------------------------------
+// demoMockScript()'s elementIds are pinned to Bugbox's exact DOM order (see
+// the comment above BUGBOX_IDS) — running it against any other app clicks
+// whatever elements happen to land on those ids. Fail closed: verify the
+// target actually serves Bugbox before wiring the scripted brain to it.
+const BUGBOX_MARKERS = ["<title>Bugbox</title>", 'id="choose-color"', 'id="add-to-cart"', 'id="load-deals"', 'id="apply-coupon"'];
+
+export async function assertMockBrainTargetIsBugbox(url) {
+  let body;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    body = await res.text();
+  } catch (err) {
+    throw new Error(
+      `--brain mock refuses to run against ${url}: could not reach it to verify it is the bundled Bugbox demo (${err?.message ?? err})`
+    );
+  }
+  if (!BUGBOX_MARKERS.every((marker) => body.includes(marker))) {
+    throw new Error(
+      `--brain mock refuses to run against ${url}: it does not look like the bundled Bugbox demo. ` +
+        `The mock brain's scripted clicks are pinned to Bugbox's exact DOM and would click random elements on a real app — use a real brain.mode instead, or drop --brain mock.`
+    );
+  }
+}
+
 async function makeBrain(config) {
   if (config.brain.mode === "mock") {
+    await assertMockBrainTargetIsBugbox(config.target.url);
     const { createMockBrain } = await import("../lib/brain/mock.mjs");
     return createMockBrain(demoMockScript());
   }

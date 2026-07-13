@@ -55,6 +55,39 @@ test("an allowed kind is not blocked by an unrelated denyActionKinds entry", asy
   assert.doesNotMatch(String(step.error), /blocked by denyActionKinds/);
 });
 
+test("goto is rejected fail-closed when it targets a different origin than the configured target", async () => {
+  const page = { url: () => "http://localhost:4183/" };
+  const step = await executeAction(
+    page,
+    { kind: "goto", url: "http://evil.example.com/lure" },
+    [],
+    { origin: "http://localhost:4183" },
+  );
+  assert.equal(step.ok, false);
+  assert.match(step.error, /goto blocked \(cross-origin or invalid url\)/);
+});
+
+test("goto without a configured target origin still rejects a cross-origin absolute url", async () => {
+  // Legacy/no-origin callers fall back to judging by the page's own origin —
+  // still fail-closed, just against a different reference point.
+  const page = { url: () => "http://localhost:4183/" };
+  const step = await executeAction(page, { kind: "goto", url: "http://evil.example.com/lure" }, []);
+  assert.equal(step.ok, false);
+  assert.match(step.error, /goto blocked \(cross-origin or invalid url\)/);
+});
+
+test("goto to a same-origin relative path is allowed", async () => {
+  const page = { url: () => "http://localhost:4183/", goto: async () => {} };
+  const step = await executeAction(
+    page,
+    { kind: "goto", url: "/cart" },
+    [],
+    { origin: "http://localhost:4183" },
+  );
+  assert.equal(step.ok, true);
+  assert.equal(step.value, "http://localhost:4183/cart");
+});
+
 test("empty denyActionKinds blocks nothing (default behavior preserved)", async () => {
   const page = { url: () => "http://localhost:4183/" };
   const step = await executeAction(

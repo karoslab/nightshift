@@ -194,6 +194,50 @@ test("report.dir must be a non-empty string", () => {
   assertConfigError(() => loadConfig(writeConfig(tmpDir(), { report: { dir: "" } })), /report\.dir/);
 });
 
+test("target.routes absolute URLs must be same-origin as target.url", () => {
+  assertConfigError(
+    () =>
+      loadConfig(
+        writeConfig(tmpDir(), {
+          target: { url: "http://localhost:3000", routes: ["/", "http://evil.example.com/lure"] },
+        })
+      ),
+    /target\.routes.*same-origin/s
+  );
+  const ok = loadConfig(
+    writeConfig(tmpDir(), { target: { url: "http://localhost:3000", routes: ["/", "http://localhost:3000/cart"] } })
+  );
+  assert.equal(ok.target.routes.length, 2);
+});
+
+test("target.selectorDenylist rejects structurally invalid CSS instead of silently ignoring it", () => {
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { target: { selectorDenylist: [".send-btn", "div[data-x=1"] } })),
+    /selectorDenylist/
+  );
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { target: { selectorDenylist: ["button:not(.ok"] } })),
+    /selectorDenylist/
+  );
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { target: { selectorDenylist: [""] } })),
+    /selectorDenylist/
+  );
+  const ok = loadConfig(
+    writeConfig(tmpDir(), { target: { selectorDenylist: [".send-btn", "button:not([disabled])", '[data-x="]"]'] } })
+  );
+  assert.equal(ok.target.selectorDenylist.length, 3);
+});
+
+test("target.denyActionKinds rejects unknown action kinds", () => {
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { target: { denyActionKinds: ["fill", "submit"] } })),
+    /denyActionKinds/
+  );
+  const ok = loadConfig(writeConfig(tmpDir(), { target: { denyActionKinds: ["fill", "press", "select"] } }));
+  assert.deepEqual(ok.target.denyActionKinds, ["fill", "press", "select"]);
+});
+
 test("two loads never share mutable state", () => {
   const dir = tmpDir();
   const a = inDir(dir, () => loadConfig());
