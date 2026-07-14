@@ -1,8 +1,9 @@
-# NightShift Security Loadout — adoption spec (clean-room, from T3MP3ST patterns)
+# NightShift Security Loadout — adoption spec (clean-room, defensive)
 
 > Status: proposed. Owner: TBD. Target: additive module, ships behind a flag.
-> This spec adds a **defensive** security-QA pass to NightShift, modeled on the
-> *architecture patterns* of elder-plinius/T3MP3ST — NOT its code.
+> This spec adds a **defensive** security-QA pass to NightShift. It adopts only
+> generic security-QA *architecture patterns* — no third-party source is copied.
+> See §0 for the clean-room rules, provenance, and licensing.
 
 ## 0. Legal preamble (load-bearing — read before writing a line)
 
@@ -119,11 +120,11 @@ script guarantee. `NS-SEC-001` style ids to keep them distinct from functional
 ## 3. Ops wiring
 
 - Add a NightShift security run to the **02:30 nightloop** as an additional
-  pass over the apps NightShift already covers (watchling, hernudge, vidi-chat)
+  pass over the apps NightShift already covers in your environment
   — findings flow into the same swarm-fix pipeline.
-- Complements, does not replace, `ops/tasks/bumblebee_security_scan.py`
-  (external scanner). NightShift's version is *in-app, evidence-verified,
-  authorized-scope-only* — the differentiator vs a generic scanner.
+- Complements, does not replace, any external scanner you already run.
+  NightShift's version is *in-app, evidence-verified, authorized-scope-only*
+  — the differentiator vs a generic scanner.
 
 ## 4. Build plan (phased, tests-first, MIT clean)
 

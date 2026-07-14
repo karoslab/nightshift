@@ -327,7 +327,7 @@ test("dead-link allow-list keys on pathname+search: a harvested ?query anchor do
 // --- fixes: false-positive review 2026-07-04 (NS-001 auth-400 validation) ---
 
 test("network-4xx: a 400 from an auth endpoint is validation, not a bug — suppressed", async () => {
-  // hernudge's POST /api/auth/signup returns 400 when required fields are empty
+  // A POST to an /api/auth/signup endpoint returns 400 when required fields are empty
   // (the server correctly rejecting bad input). That is not a bug in the app.
   await withOracles(async (page, { events }) => {
     await page.evaluate(() => fetch("/api/auth/signup", { method: "POST" }).catch(() => {}));

@@ -129,7 +129,7 @@ test("accessible name preference: aria-label beats text; label beats placeholder
 // --- fixes: false-positive review 2026-07-04 (NS-001 recorder accname case) ---
 
 test("CSS text-transform:uppercase label keeps DOM casing (getByRole round-trips)", async () => {
-  // hernudge's .field-label renders "Your name" as "YOUR NAME" (text-transform).
+  // A CSS `text-transform:uppercase` label renders "Your name" as "YOUR NAME".
   // innerText is CSS-rendered, so the old innerText||textContent path recorded
   // "YOUR NAME" — but getByRole matches the spec accname from DOM text, so the
   // replay locator getByRole('textbox', {name:'YOUR NAME', exact:true}) timed

@@ -290,8 +290,8 @@ with `stdio: ["ignore","pipe","pipe"]` and a 120s inactivity kill.
    `<their-project>/.nightshift/`) would load their CLAUDE.md, project
    settings, and HOOKS, executing buyer shell hooks ~160×/night unattended.
 2. `--setting-sources project` — excludes user-level ~/.claude/settings.json
-   and user CLAUDE.md memory (verified load-bearing on CLI 2.1.195 in the
-   vidi-chat reference). With an empty temp cwd there are no project settings
+   and user CLAUDE.md memory (verified load-bearing on CLI 2.1.195). With an
+   empty temp cwd there are no project settings
    either: clean slate. (The buyer's own CLI auth/login of course still
    applies — that is the point of the mode.)
 3. Child env strips ALL billing/routing overrides in subscription mode (the
@@ -536,10 +536,3 @@ Commands (plain argv parsing, no deps):
   findings on /about, every confirmed finding has a repro script that exits 0
   when executed, report.md exists and contains no banned marketing strings
   (`free forever`, `zero marginal cost`, `unlimited`).
-
-## Ship plan (after green tests + review)
-git init → private repo `karoslab/nightshift` → DG register
-(name "NightShift QA" → slug `nightshift-qa`, url http://localhost:4184,
-paths `/`, contains "NightShift", api + headers REQUIRED, disable tls) →
-launchd `com.karoslabs.nightshift` (console :4184, KeepAlive) → `dg-gate
-nightshift-qa` exit 0 → add /ship map row → Discord #dev notify.

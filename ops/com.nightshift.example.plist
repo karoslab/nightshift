@@ -23,7 +23,7 @@
     <string>/path/to/node</string>
     <string>/path/to/nightshift/console/server.mjs</string>
     <string>--port</string>
-    <string>4186</string>
+    <string>4184</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

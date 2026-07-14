@@ -4,7 +4,6 @@
   "description": "The overnight QA employee you run on your own machine, with your own Claude. Explores your web app, finds bugs, and only files the ones it can deterministically reproduce.",
   "type": "module",
   "license": "MIT",
-  "private": true,
   "bin": {
     "nightshift": "bin/nightshift.mjs"
   },
@@ -24,7 +23,8 @@
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "demo": "node bin/nightshift.mjs demo",
-    "console": "node console/server.mjs"
+    "console": "node console/server.mjs",
+    "prepublishOnly": "node -e \"console.error('This repo is not published to npm'); process.exit(1)\""
   },
   "dependencies": {
     "playwright": "^1.61.1"
