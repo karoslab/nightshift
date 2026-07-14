@@ -1,12 +1,23 @@
-# NightShift QA
+# NightShift
 
-**The overnight QA employee that only files bugs it can prove.**
+**Overnight QA that only files bugs it can prove.**
 
-NightShift explores your web app while you sleep: a Claude brain proposes one
-action at a time, deterministic oracles (console errors, page crashes, failing
-API calls, dead links) watch every page, and — the part that actually matters —
-a **repro-re-verification layer** replays every suspected bug in a fresh
-browser context with the LLM completely out of the loop. A finding is only
+NightShift is an overnight QA employee for your web app. It explores the app
+while you sleep, watches every page with deterministic oracles, re-verifies
+each suspected bug with the model out of the loop, and files a report of only
+the bugs it could reproduce. Bring your own Claude or Anthropic API key; nothing
+is hosted, nothing is pooled, everything runs on your machine.
+
+> Screenshot placeholder — TODO(karthik): report.md with confirmed findings.
+> Screenshot placeholder — TODO(karthik): the localhost console viewer.
+> Clip placeholder — TODO(karthik): a 30s "watch it find a real bug overnight" recording.
+
+## How it works
+
+A Claude brain proposes one action at a time. Deterministic oracles (console
+errors, page crashes, failing API calls, dead links) watch every page. The part
+that matters: a **repro-re-verification layer** replays every suspected bug in a
+fresh browser context with the LLM completely out of the loop. A finding is only
 marked **confirmed** after the exact recorded action trace reproduces the same
 failure signature. No replay, no bug report.
 
@@ -14,14 +25,14 @@ Every confirmed bug ships with:
 
 - a numbered, human-readable repro in `report.md`
 - a screenshot taken at detection time
-- a **standalone repro script** (`repro/NS-001.mjs`, plain Playwright, exits 0
-  when the bug reproduces) you can attach to a ticket or run in CI as a
-  regression test
+- a standalone repro script (`repro/NS-001.mjs`, plain Playwright, exits 0 when
+  the bug reproduces) you can attach to a ticket or run in CI as a regression
+  test
 
-An LLM that "found a bug" is worthless if it hallucinated. NightShift's
-verdicts are earned deterministically, which is the entire point.
+An LLM that "found a bug" is worthless if it hallucinated. NightShift's verdicts
+are earned deterministically, which is the entire point.
 
-## Quickstart — the 60-second demo (no Claude account needed)
+## Quickstart: the demo (no Claude account needed)
 
 ```bash
 npm install
@@ -31,48 +42,38 @@ node bin/nightshift.mjs demo
 
 `demo` boots **Bugbox**, a deliberately broken demo shop, on an ephemeral
 localhost port, runs a full scripted session against it (mock brain, zero LLM
-cost), re-verifies every candidate finding in fresh browser contexts, and
-prints the path to the generated report. Open the report, read the confirmed
-bugs, run a repro script. That is the whole product in miniature.
+cost), re-verifies every candidate finding in fresh browser contexts, and prints
+the path to the generated report. Open the report, read the confirmed bugs, run
+a repro script. That is the whole product in miniature.
 
 Then point it at your own app:
 
 ```bash
-nightshift init      # writes nightshift.config.json — set target.url
-nightshift doctor    # checks config, target reachability, brain auth, browser
-nightshift run       # one session -> reverify candidates -> report
-nightshift overnight # sessions in a loop, within budget, until the stop hour
+node bin/nightshift.mjs init      # writes nightshift.config.json, set target.url
+node bin/nightshift.mjs doctor    # checks config, target reachable, brain auth, browser
+node bin/nightshift.mjs run       # one session, reverify candidates, report
+node bin/nightshift.mjs overnight # sessions in a loop, within budget, until the stop hour
 ```
 
-## Two ways to bring the brain
+## Bring your own brain
 
-NightShift never ships or pools credentials — you bring your own Claude, in
-one of two modes (switching is a one-line config edit):
+NightShift never ships or pools credentials. You bring your own Claude, in one
+of two modes (switching is a one-line config edit):
 
-1. **`subscription-cli`** (default) — runs on the Claude subscription you
-   already have — today, subject to Anthropic's usage limits and policies,
-   which can change. NightShift spawns your own unmodified official `claude`
-   CLI in print mode; the CLI owns its own login. Conservative default budgets
-   keep usage in ordinary-individual territory.
-2. **`api-key`** — the metered/business option. Set
-   `"brain": { "mode": "api-key" }` and export your own Anthropic API key
-   (`ANTHROPIC_API_KEY` by default). NightShift calls the Messages API
-   directly and reports token usage per run. Predictable, meterable, yours.
+1. **`subscription-cli`** (default) — runs on the Claude subscription you already
+   have, subject to Anthropic's usage limits and policies. NightShift spawns your
+   own unmodified official `claude` CLI in print mode; the CLI owns its own login.
+   Conservative default budgets keep usage in ordinary-individual territory.
+2. **`api-key`** — the metered option. Set `"brain": { "mode": "api-key" }` and
+   export your own Anthropic API key (`ANTHROPIC_API_KEY` by default). NightShift
+   calls the Messages API directly and reports token usage per run.
 
 You are responsible for your own Anthropic account, plan limits, and policy
-compliance in both modes — see [TERMS.md](TERMS.md).
+compliance in both modes. See [TERMS.md](TERMS.md).
 
-## Commands
-
-| command | what it does |
-|---|---|
-| `nightshift init` | write `nightshift.config.json` into the current directory |
-| `nightshift doctor` | environment checklist: config, target reachable, brain auth, chromium — exit 0/1 |
-| `nightshift run [--config path] [--brain mock]` | one session → reverify each candidate → report (exit 0 even when bugs are found; bugs are the product) |
-| `nightshift overnight` | sessions in a loop while the night budget allows and before `budget.stopAtHour` |
-| `nightshift verify <findingId> [--run <id>]` | replay one finding from an existing report — the buyer-facing trust command |
-| `nightshift console [--port 4184]` | localhost report viewer (binds 127.0.0.1 only) |
-| `nightshift demo` | boot Bugbox + scripted session + report, then tear it all down |
+NightShift makes no network calls except to the target app under test and, in
+api-key mode, `api.anthropic.com`. No telemetry. The bundled console is a
+localhost report viewer that binds `127.0.0.1` only.
 
 ## Architecture
 
@@ -81,7 +82,7 @@ compliance in both modes — see [TERMS.md](TERMS.md).
   subscription-cli | api-key | mock      console-error / page-error / network-5xx
             |                            network-4xx / request-failed / dead-link
             v                                        |
-  session ──> explorer ──> trace ────────────────────┤   candidates
+  session --> explorer --> trace --------------------+   candidates
   (one page loop: enumerate elements,                v
    ask brain for ONE action, execute,        reverify (LLM-free)
    record TraceStep, collect failures)       fresh context, replay trace,
@@ -91,137 +92,79 @@ compliance in both modes — see [TERMS.md](TERMS.md).
    report.json / report.md / shots/ / repro/   confirmed | flaky | unconfirmed | unverifiable
 ```
 
-- **lib/session.mjs** orchestrates one QA session: visit seed routes, ask the
-  brain for one action per turn, execute it, collect failure events, snapshot
-  candidate findings with screenshots. The session never re-verifies — replay
-  stays LLM-free by construction.
+- **lib/session.mjs** orchestrates one QA session and never re-verifies, so
+  replay stays LLM-free by construction.
 - **lib/trace.mjs** owns `executeStep`, the ONLY code that performs a step.
-  Recording (explorer), replay (reverify), and generated repro scripts all run
-  the same execution path, so they cannot diverge.
+  Recording, replay, and generated repro scripts all run the same path, so they
+  cannot diverge.
 - **lib/reverify.mjs** replays each candidate in fresh browser contexts and
-  issues verdicts. `confirmed` means the failure signature reproduced in at
-  least `reverify.requiredPasses` of `reverify.replays` replays.
-- **lib/signature.mjs** normalizes failure signatures (dependency-free — the
-  exact same functions are embedded into generated repro scripts, with a
-  parity test).
-- **lib/reprogen.mjs** emits standalone Playwright repro scripts: exit 0 =
-  reproduced, exit 1 = not.
+  issues verdicts. `confirmed` means the failure signature reproduced in at least
+  `reverify.requiredPasses` of `reverify.replays` replays.
+- **lib/signature.mjs** normalizes failure signatures (dependency-free, embedded
+  verbatim into generated repro scripts, with a parity test).
 - **lib/oracles.mjs** are the eyes, with load-bearing noise filters: only
-  fetch/XHR failures count (a missing favicon is noise), expected auth
-  statuses (401/403) never fire, navigation-abort races are excluded, and
-  dead-links only count when they come from real anchors or configured routes.
-- Brain-flagged **semantic findings** (wrong content, e.g. `Total: NaN`) must
-  carry a deterministic text check to be verifiable; findings without one are
-  segregated as `unverifiable` and never presented as confirmed.
-
-## Compliance box
-
-1. **BYO-subscription mode** spawns the buyer's OWN unmodified official
-   `claude` CLI (`claude -p`, print mode) as a subprocess. NightShift **never
-   reads, stores, logs, or transmits** OAuth tokens or any file under
-   `~/.claude/`. No Agent SDK under subscription credentials, no harness
-   spoofing. The CLI owns its own login. The subprocess runs from an empty
-   temp cwd with `--setting-sources project` and a billing-var-stripped env,
-   so the buyer's hooks/settings/memory never execute or leak into QA turns.
-2. **API-key mode** is a first-class config toggle (`brain.mode: "api-key"`),
-   calling `https://api.anthropic.com/v1/messages` with the buyer's own key
-   from an env var. Switching modes is a config edit, not a rewrite.
-3. **Never hosted, never pooled.** Execution is 100% local to the buyer's
-   machine. No server component touches any Claude credential; the bundled
-   console is a localhost report viewer only (binds 127.0.0.1 explicitly).
-4. Conservative default budgets keep subscription-mode usage inside ordinary
-   individual usage territory; buyers are responsible for their own Anthropic
-   account and limits ([TERMS.md](TERMS.md)).
-5. **Telemetry: none.** NightShift makes no network calls except to the target
-   app under test and (in api-key mode) api.anthropic.com.
-
-## What gets sent to the model
-
-Every brain turn sends the current page state as plain text to the model, no
-more and no less:
-
-- the page URL and title
-- a numbered table of interactive elements (role, accessible name, tag,
-  disabled/editable state) — not full page HTML
-- a page text excerpt, capped at 1500 characters
-- recent failure messages from the oracles (e.g. a console error or a 5xx
-  response) for the current page
-- the list of URLs visited so far this session
-
-In `subscription-cli` mode (the default), this turn text is sent to the
-`claude` CLI already installed and logged into on your machine, so it goes
-through your own Claude account exactly as if you had typed it yourself. In
-`api-key` mode it is sent directly to `api.anthropic.com` under your own API
-key. See [Two ways to bring the brain](#two-ways-to-bring-the-brain) and
-[TERMS.md](TERMS.md).
+  fetch/XHR failures count, expected auth statuses (401/403) never fire,
+  navigation-abort races are excluded.
+- **lib/security/** is an optional, off-by-default defensive check set (missing
+  security headers, insecure cookie flags, mixed content) that reuses the same
+  re-verification and scope-containment discipline. See
+  [PLAN-security-loadout.md](PLAN-security-loadout.md).
 
 ## Configuration
 
-`nightshift init` writes this file; every key shown is the default:
+`nightshift init` writes `nightshift.config.json`; every key shown is the
+default. See [examples/nightshift.config.json](examples/nightshift.config.json).
 
-```json
-{
-  "target": {
-    "name": "My App",
-    "url": "http://localhost:3000",
-    "routes": ["/"],
-    "maxRoutes": 12,
-    "actionsPerPage": 6
-  },
-  "brain": {
-    "mode": "subscription-cli",
-    "model": "sonnet",
-    "cliPath": null,
-    "apiKeyEnv": "ANTHROPIC_API_KEY",
-    "apiModel": "claude-sonnet-5",
-    "maxOutputTokens": 2048
-  },
-  "budget": {
-    "maxLlmCalls": 40,
-    "maxMinutes": 45,
-    "maxSessionsPerNight": 4,
-    "stopAtHour": 6
-  },
-  "oracles": {
-    "expectedStatuses": [401, 403],
-    "ignoreConsole": ["ResizeObserver loop", "\\[HMR\\]", "Download the React DevTools"]
-  },
-  "reverify": { "replays": 2, "requiredPasses": 2, "navTimeoutMs": 15000 },
-  "report": { "dir": ".nightshift" }
-}
-```
-
-Notes:
-
-- `budget.maxLlmCalls` / `maxMinutes` apply **per session**;
-  `maxSessionsPerNight` and `stopAtHour` bound the `overnight` loop (a run
-  starting at 23:00 with `stopAtHour: 6` runs through midnight and stops at
-  06:00). `stopAtHour` is a morning hour, 0-11 — the overnight wrap has no
-  meaning for afternoon/evening values and the config loader rejects them.
-- `oracles.expectedStatuses` — statuses your app returns on purpose (auth
-  probes) that should never be filed as bugs.
+- `budget.maxLlmCalls` / `maxMinutes` apply per session; `maxSessionsPerNight`
+  and `stopAtHour` bound the `overnight` loop. `stopAtHour` is a morning hour
+  (0-11); the config loader rejects afternoon/evening values.
+- `oracles.expectedStatuses` are statuses your app returns on purpose that should
+  never be filed as bugs.
 - Point NightShift only at apps you own or are authorized to test.
+
+## Current state and limitations
+
+NightShift is version 0.1.0 and honest about its edges:
+
+- **Web apps only.** It drives Chromium via Playwright. No mobile, no native, no
+  desktop apps.
+- **Exploration is shallow-to-medium depth.** It follows real anchors and
+  configured routes, enumerates interactive elements, and takes a bounded number
+  of actions per page (`actionsPerPage`, default 6). It is not a full crawler and
+  will not find bugs behind long multi-step flows unless you seed those routes.
+- **The bug classes are fixed.** Console errors, page crashes, 4xx/5xx API calls,
+  request failures, dead links, and brain-flagged semantic findings that carry a
+  deterministic text check. Anything the oracles do not watch, it does not find.
+- **Semantic findings need a deterministic check to be confirmed.** A finding the
+  brain flags without a machine-checkable assertion is segregated as
+  `unverifiable` and never presented as confirmed.
+- **Subscription-cli mode depends on Anthropic's policies**, which can change.
+  Budgets are conservative but you own your account and limits.
+- **Single-machine, single-operator.** No hosting, no fleet, no dashboard beyond
+  the localhost report viewer.
+- **Reproduction is best-effort against nondeterministic apps.** Findings that do
+  not replay a required number of times are marked `flaky`, not `confirmed`, by
+  design. Highly nondeterministic UIs will surface fewer confirmed bugs.
 
 ## Testing
 
 ```bash
-npm test                          # full suite
+npm test                          # full suite (247 tests)
 node --test tests/config.test.mjs # focused module tests
 ```
 
-The flagship test (`tests/e2e.test.mjs`) boots Bugbox on an ephemeral port,
-runs the whole pipeline with the scripted mock brain, and asserts confirmed
-findings for a page crash, a 500ing API, a dead link, and a `Total: NaN`
-semantic check — plus zero findings on Bugbox's clean `/about` page, and that
-every confirmed finding's repro script exits 0.
+The flagship test (`tests/e2e.test.mjs`) boots Bugbox on an ephemeral port, runs
+the whole pipeline with the scripted mock brain, and asserts confirmed findings
+for a page crash, a 500ing API, a dead link, and a `Total: NaN` semantic check,
+plus zero findings on Bugbox's clean `/about` page, and that every confirmed
+finding's repro script exits 0.
 
-## Maintenance
+## Contributing and security
 
-NightShift is a personal project, maintained as time allows. PRs and issues
-are welcome, but review may be slow.
+- [CONTRIBUTING.md](CONTRIBUTING.md) for how to build and send changes.
+- [SECURITY.md](SECURITY.md) to report a vulnerability privately.
 
-## Terms
+## License
 
-See [TERMS.md](TERMS.md). Short version: everything runs locally, NightShift
-never touches your credentials, you are responsible for your own Anthropic
-account and for only testing apps you are allowed to test.
+MIT. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Terms of use in
+[TERMS.md](TERMS.md).

@@ -132,11 +132,11 @@ test("performStep: fill and press go through the shared path", async () => {
       if (e.key === 'Enter') document.getElementById('out').textContent = 'submitted:' + e.target.value;
     });</script>`);
   const locator = { strategy: "role", role: "textbox", name: "Name", nth: 0 };
-  const fillStep = await performStep(page, { i: 1, kind: "fill", locator, value: "karthik" });
+  const fillStep = await performStep(page, { i: 1, kind: "fill", locator, value: "tester" });
   assert.equal(fillStep.ok, true);
   const pressStep = await performStep(page, { i: 2, kind: "press", locator, value: "Enter" });
   assert.equal(pressStep.ok, true);
-  assert.equal(await page.locator("#out").innerText(), "submitted:karthik");
+  assert.equal(await page.locator("#out").innerText(), "submitted:tester");
 });
 
 test("executeAction: maps elementId to locator, records failures, guards cross-origin goto", async () => {

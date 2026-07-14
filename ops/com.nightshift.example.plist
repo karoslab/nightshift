@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Example launchd job that keeps the NightShift console running on macOS.
+  Copy to ~/Library/LaunchAgents/com.nightshift.plist, replace every
+  /path/to/nightshift with your absolute checkout path and /path/to/node with
+  the output of `which node`, then run:
+    launchctl load ~/Library/LaunchAgents/com.nightshift.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nightshift</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>/path/to/nightshift</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/node</string>
+    <string>/path/to/nightshift/console/server.mjs</string>
+    <string>--port</string>
+    <string>4186</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/path/to/nightshift/.nightshift/console.log</string>
+  <key>StandardErrorPath</key>
+  <string>/path/to/nightshift/.nightshift/console.error.log</string>
+</dict>
+</plist>
