@@ -8,9 +8,21 @@ each suspected bug with the model out of the loop, and files a report of only
 the bugs it could reproduce. Bring your own Claude or Anthropic API key; nothing
 is hosted, nothing is pooled, everything runs on your machine.
 
-> Screenshot placeholder — TODO(karthik): report.md with confirmed findings.
-> Screenshot placeholder — TODO(karthik): the localhost console viewer.
-> Clip placeholder — TODO(karthik): a 30s "watch it find a real bug overnight" recording.
+What a run looks like (real output from `nightshift demo`):
+
+```
+NS-001: replay 1/2 -> reproduced
+NS-001: replay 2/2 -> reproduced
+
+NightShift findings
+-------------------
+NS-001   confirmed     critical  page-error at /: cart.total is not a function
+NS-002   confirmed     critical  network-5xx at /api/flaky: HTTP 500 GET /api/flaky
+NS-003   text-verified major     Applying a coupon renders "Total: NaN"
+NS-004   confirmed     minor     dead-link at /warranty: navigation landed on HTTP 404
+
+confirmed: 3  text-verified: 1
+```
 
 ## How it works
 
