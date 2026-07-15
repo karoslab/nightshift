@@ -119,7 +119,12 @@ throws `ConfigError` with a human message on invalid shapes.
 - `stats` (returned by runSession, consumed by writeReport):
   `{routesVisited, actionsExecuted, llmCalls, startedAt, endedAt, durationMs,
   usage: {inputTokens, outputTokens, costUsd|null}}` — session aggregates usage
-  by summing every ask() result (including failed asks).
+  by summing every ask() result (including failed asks). Sweep mode
+  (lib/sweep.mjs) returns the same shape plus `mode: "sweep"` and a `coverage`
+  block `{routes: [{url, found, exercised, skipped, failed, forms, coveragePct}],
+  totals: {…, coveragePct}}`; computeRunState judges a sweep on
+  actionsExecuted (it makes no LLM turns), and writeReport renders the coverage
+  block as a table.
 - `brainMeta` (writeReport input): `{mode, model}` from the createBrain return.
 
 ## Shared data shapes (pinned — do not extend without updating this doc)

@@ -270,6 +270,11 @@ test("computeRunState: healthy/degraded/failed/inconclusive from turn success ra
   assert.equal(computeRunState({ llmCalls: 4, turnsOk: 4, actionsExecuted: 0 }), "inconclusive", "turns ok but nothing was ever explored");
 });
 
+test("computeRunState: sweep mode is judged on actions, not LLM turns (llmCalls==0 is healthy)", () => {
+  assert.equal(computeRunState({ mode: "sweep", llmCalls: 0, actionsExecuted: 8 }), "healthy", "a sweep that exercised elements is healthy despite zero LLM calls");
+  assert.equal(computeRunState({ mode: "sweep", llmCalls: 0, actionsExecuted: 0 }), "inconclusive", "a sweep that exercised nothing is inconclusive");
+});
+
 test("writeReport persists runState in report.json and report.md", (t) => {
   const base = tmpBase(t);
   const { runDir } = createRun({ report: { dir: base } });

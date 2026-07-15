@@ -4,7 +4,8 @@
     "url": "http://localhost:3000",
     "routes": ["/"],
     "maxRoutes": 12,
-    "actionsPerPage": 6
+    "actionsPerPage": 6,
+    "sweep": false
   },
   "brain": {
     "mode": "subscription-cli",

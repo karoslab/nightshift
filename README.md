@@ -87,6 +87,48 @@ NightShift makes no network calls except to the target app under test and, in
 api-key mode, `api.anthropic.com`. No telemetry. The bundled console is a
 localhost report viewer that binds `127.0.0.1` only.
 
+## Sweep mode (deterministic, no LLM)
+
+The default explorer is Claude-guided and budgeted — it picks a handful of
+actions per page. **Sweep mode** trades that judgement for exhaustive,
+deterministic coverage with zero LLM calls:
+
+```bash
+node bin/nightshift.mjs run --sweep                 # deterministic exhaustive crawl
+node bin/nightshift.mjs run --sweep --resume <runId> # continue an interrupted sweep
+```
+
+or pin it in config with `"target": { "sweep": true }`.
+
+What a sweep does, per run:
+
+- **Crawls every same-origin route** reachable from `target.routes` (BFS over
+  real anchors) and deep-links each discovered route directly, up to
+  `maxRoutes`.
+- **Exercises every interactive element** on each route (no 30-element cap):
+  clicks buttons/links, toggles checkboxes/radios, selects options, fills text
+  fields — in stable DOM order, honoring `selectorDenylist` and
+  `denyActionKinds` exactly as the explorer does.
+- **Hits every form three ways**: an empty submit, a hostile submit (overlong +
+  non-ASCII + script-tag payload), and a plausible valid submit derived from
+  each field's type/name/placeholder (no LLM; a brain hook is left for later).
+- **Opens, exercises, and closes modals** (close control, then Escape fallback)
+  so an open overlay never masks the rest of the queue.
+- **Tracks coverage** — elements found / exercised / skipped (denied) / failed
+  per route — and writes a coverage block into `report.json` and a table into
+  `report.md`.
+
+Everything downstream is unchanged: the same oracles, the same repro-trace
+recording, the same reverify pipeline, and the optional security loadout all
+run identically. A sweep finding replays exactly like an explorer finding.
+Budget guards still apply: `maxMinutes` is a hard stop, and the element queue is
+checkpointed into the run dir after every element, so an interrupted sweep
+resumes instead of restarting (`--resume <runId>`).
+
+Sweep is deterministic, so it never surfaces brain-only semantic findings (e.g.
+a `Total: NaN` that needs a human-style judgement) — it finds what the oracles
+can prove.
+
 ## Architecture
 
 ```
@@ -132,6 +174,9 @@ default. See [examples/nightshift.config.json](examples/nightshift.config.json).
   (0-11); the config loader rejects afternoon/evening values.
 - `oracles.expectedStatuses` are statuses your app returns on purpose that should
   never be filed as bugs.
+- `target.sweep` (default `false`) switches the run into deterministic sweep mode
+  (see [Sweep mode](#sweep-mode-deterministic-no-llm)); `--sweep` sets it for one
+  run without editing config.
 - Point NightShift only at apps you own or are authorized to test.
 
 ## Current state and limitations
@@ -140,10 +185,12 @@ NightShift is version 0.1.0 and honest about its edges:
 
 - **Web apps only.** It drives Chromium via Playwright. No mobile, no native, no
   desktop apps.
-- **Exploration is shallow-to-medium depth.** It follows real anchors and
-  configured routes, enumerates interactive elements, and takes a bounded number
-  of actions per page (`actionsPerPage`, default 6). It is not a full crawler and
-  will not find bugs behind long multi-step flows unless you seed those routes.
+- **Exploration is shallow-to-medium depth by default.** The Claude-guided
+  explorer follows real anchors and configured routes, enumerates interactive
+  elements, and takes a bounded number of actions per page (`actionsPerPage`,
+  default 6). It will not find bugs behind long multi-step flows unless you seed
+  those routes. For exhaustive, LLM-free coverage instead, use
+  [sweep mode](#sweep-mode-deterministic-no-llm) (`--sweep`).
 - **The bug classes are fixed.** Console errors, page crashes, 4xx/5xx API calls,
   request failures, dead links, and brain-flagged semantic findings that carry a
   deterministic text check. Anything the oracles do not watch, it does not find.
@@ -161,7 +208,7 @@ NightShift is version 0.1.0 and honest about its edges:
 ## Testing
 
 ```bash
-npm test                          # full suite (247 tests)
+npm test                          # full suite (263 tests)
 node --test tests/config.test.mjs # focused module tests
 ```
 

@@ -22,8 +22,10 @@ usage: nightshift <command> [options]
 commands:
   init                       write nightshift.config.json into the current directory
   doctor [--config path]     check config, target reachability, brain auth, browser
-  run [--config path] [--brain mock]
+  run [--config path] [--brain mock] [--sweep] [--resume <runId>]
                              one QA session -> reverify candidates -> report
+                             --sweep: deterministic exhaustive crawl (no LLM);
+                             --resume: continue an interrupted sweep run dir
   overnight [--config path]  sessions in a loop within budget until stop hour
   verify <findingId> [--run <runId>] [--config path]
                              replay one finding from an existing report
@@ -289,8 +291,26 @@ async function cmdDoctor(flags) {
   process.exitCode = ok ? 0 : 1;
 }
 
+// Resolve the run dir: --resume <runId> continues an existing run dir (sweep
+// checkpoint lives there); otherwise a fresh run dir is minted.
+async function resolveRunDir(config, flags) {
+  const { createRun } = await import("../lib/runstore.mjs");
+  if (flags.resume) {
+    const runDir = path.join(path.resolve(config.report.dir), String(flags.resume));
+    if (!existsSync(runDir)) throw new Error(`--resume: run dir not found: ${runDir}`);
+    return { runDir };
+  }
+  return createRun(config);
+}
+
 async function cmdRun(flags) {
   const config = loadConfig(flags.config);
+  if (flags.sweep) config.target.sweep = true;
+
+  // Sweep mode is deterministic and LLM-free — it never constructs a brain
+  // (skipping subscription/api auth and the mock-brain Bugbox guard entirely).
+  if (config.target.sweep) return await cmdRunSweep(config, flags);
+
   if (flags.brain === "mock") config.brain.mode = "mock";
 
   await withBrain(config, async (brain) => {
@@ -313,6 +333,30 @@ async function cmdRun(flags) {
   });
   // exit 0 regardless of bugs found — bugs are the product, not an error.
   // Nonzero only when runState says exploration itself didn't happen.
+}
+
+// Deterministic sweep: exhaustive same-origin crawl, every interactive element
+// exercised, three input passes per form — no brain. Findings are shaped like
+// explorer findings, so reverify + report run unchanged.
+async function cmdRunSweep(config, flags) {
+  const { runSweep } = await import("../lib/sweep.mjs");
+  const { runDir } = await resolveRunDir(config, flags);
+  log("info", `run: starting deterministic sweep against ${config.target.url}${flags.resume ? " (resume)" : ""}`);
+  const { findings, stats } = await runSweep({ config, runDir, log });
+  log(
+    "info",
+    `run: sweep done — ${findings.length} candidate(s), ${stats.coverage?.totals?.coveragePct ?? 0}% element coverage, reverifying`,
+  );
+  const { mdPath, findings: finals, runState } = await reverifyAndReport({
+    config,
+    findings,
+    stats,
+    brainMeta: { mode: "sweep", model: "deterministic" },
+    runDir,
+    log,
+  });
+  printSummary(finals, mdPath, runState);
+  process.exitCode = exitCodeForRunState(runState);
 }
 
 async function cmdOvernight(flags) {
