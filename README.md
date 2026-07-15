@@ -204,11 +204,19 @@ NightShift is version 0.1.0 and honest about its edges:
 - **Reproduction is best-effort against nondeterministic apps.** Findings that do
   not replay a required number of times are marked `flaky`, not `confirmed`, by
   design. Highly nondeterministic UIs will surface fewer confirmed bugs.
+- **Sweep mode's modal handling is hygiene, not deep coverage.** Sweep opens,
+  exercises, and closes overlays so they don't mask the queue, but a modal
+  control's click is deliberately not recorded onto the replayable trace (it has
+  no stable locator). A bug that *only* a modal-inner control triggers is
+  therefore collected but will not reproduce on reverify, so it stays
+  `unconfirmed` rather than being filed — a conservative trade (no false
+  positives) until modal controls get stable, replayable locators. Reach those
+  flows with the Claude-guided explorer or a seeded route instead.
 
 ## Testing
 
 ```bash
-npm test                          # full suite (264 tests)
+npm test                          # full suite (265 tests)
 node --test tests/config.test.mjs # focused module tests
 ```
 

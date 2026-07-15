@@ -224,6 +224,56 @@ test("sweep resumes an interruption mid-route on a NON-seed route (continues, no
   assert.ok(hasDeepBug(second.findings), "resume must finish sweeping the interrupted non-seed route and find its bug");
 });
 
+test("resume preserves a bug found on a route completed BEFORE the interruption", { timeout: 120_000 }, async (t) => {
+  // Two seed routes: /a (a console-error bug, swept to completion) and /b (also
+  // buggy, interrupted before it starts). If the checkpoint only saved the queue
+  // and coverage — not the collected findings — the resumed run would overwrite
+  // the report with /b's bug alone and silently drop /a's. This asserts both
+  // survive (requirement #5: a sweep finding survives; #7: continue, not restart).
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, "http://x");
+    res.writeHead(200, { "content-type": "text/html" });
+    if (u.pathname === "/a") {
+      res.end(`<html><body><h1>A</h1><button onclick="console.error('bug-on-a')">boom</button></body></html>`);
+      return;
+    }
+    if (u.pathname === "/b") {
+      res.end(
+        `<html><body><h1>B</h1>
+         <button>one</button><button>two</button>
+         <button onclick="console.error('bug-on-b')">three</button></body></html>`,
+      );
+      return;
+    }
+    res.end("<html><body>home</body></html>");
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const runDir = fsSync.mkdtempSync(path.join(ROOT, "node_modules", ".cache", "ns-resume-keep-"));
+  t.after(async () => {
+    await new Promise((r) => server.close(r));
+    fsSync.rmSync(runDir, { recursive: true, force: true });
+  });
+  fsSync.mkdirSync(path.join(runDir, "shots"), { recursive: true });
+  const config = baseConfig(origin, runDir, { routes: ["/a", "/b"], maxRoutes: 12 });
+  const bug = (findings, msg) =>
+    findings.filter((f) => f.source === "oracle:console-error" && new RegExp(msg).test(f.failure?.message ?? ""));
+
+  // Interrupt after /a completes and /b is popped, before /b's first element.
+  let ticks = 0;
+  const first = await runSweep({ config, runDir, log: quietLog, budget: { timeLeft: () => (++ticks <= 3), tryConsumeCall: () => true } });
+  assert.equal(bug(first.findings, "bug-on-a").length, 1, "the first run finds /a's bug");
+  assert.equal(bug(first.findings, "bug-on-b").length, 0, "the first run stops before /b's bug");
+
+  const second = await runSweep({ config, runDir, log: quietLog });
+  // /a's bug (found and completed before the stop) must survive the resume...
+  assert.equal(bug(second.findings, "bug-on-a").length, 1, "resume must preserve the pre-interruption finding (exactly once, not duplicated)");
+  // ...alongside /b's newly-swept bug.
+  assert.equal(bug(second.findings, "bug-on-b").length, 1, "resume must also find /b's bug");
+  // Ids do not collide across the resume boundary.
+  assert.equal(new Set(second.findings.map((f) => f.id)).size, second.findings.length, "finding ids must be unique after resume");
+});
+
 test("sweep resumes from a checkpoint instead of re-sweeping a completed route", { timeout: 60_000 }, async (t) => {
   let hits = 0;
   const server = http.createServer((req, res) => {
