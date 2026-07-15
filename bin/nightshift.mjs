@@ -9,6 +9,10 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadConfig, ConfigError } from "../lib/config.mjs";
+// countsByStatus is dependency-free (report.mjs only pulls in fs/runstore/reprogen,
+// never playwright), so a static import here is safe and keeps buildCiSummary
+// unit-testable without booting a browser.
+import { countsByStatus } from "../lib/report.mjs";
 
 // Pinned log shape: (level, message) => void, levels "info" | "warn" | "error".
 const log = (level, message) => console.error("[" + level + "] " + message);
@@ -23,9 +27,13 @@ commands:
   init                       write nightshift.config.json into the current directory
   doctor [--config path]     check config, target reachability, brain auth, browser
   run [--config path] [--brain mock] [--sweep] [--resume <runId>]
+      [--ci] [--severity-floor minor|major|critical]
                              one QA session -> reverify candidates -> report
                              --sweep: deterministic exhaustive crawl (no LLM);
-                             --resume: continue an interrupted sweep run dir
+                             --resume: continue an interrupted sweep run dir;
+                             --ci: machine-readable summary.json + exit nonzero
+                             when a confirmed finding meets --severity-floor
+                             (default major) or exploration did not happen
   overnight [--config path]  sessions in a loop within budget until stop hour
   verify <findingId> [--run <runId>] [--config path]
                              replay one finding from an existing report
@@ -173,6 +181,93 @@ export function exitCodeForRunState(runState) {
   return runState === "failed" || runState === "inconclusive" ? 1 : 0;
 }
 
+// ---------------------------------------------------------------------------
+// CI mode (nightshift run --ci) — machine-readable gating for GitHub Actions.
+// Severity ordering matches lib/collector.mjs (SEVERITY_BY_ORACLE) and the
+// brain prompt: critical > major > minor. A CI run "fails" (nonzero exit) when
+// a *confirmed* finding meets the severity floor — confirmed is the only status
+// with a deterministic repro (text-verified/flaky/unconfirmed are weaker and do
+// not gate). A run that never explored (runState failed/inconclusive) also
+// fails: a zero-finding report from an app that never loaded is a false green.
+// ---------------------------------------------------------------------------
+export const SEVERITY_FLOORS = ["minor", "major", "critical"];
+const SEVERITY_RANK = { minor: 1, major: 2, critical: 3 };
+
+export function severityAtOrAbove(severity, floor) {
+  const s = SEVERITY_RANK[severity] ?? 0; // unknown severity clears no floor
+  const f = SEVERITY_RANK[floor] ?? SEVERITY_RANK.major;
+  return s >= f;
+}
+
+export function ciBlockingFindings(findings = [], severityFloor = "major") {
+  return findings.filter((f) => f.status === "confirmed" && severityAtOrAbove(f.severity, severityFloor));
+}
+
+export function ciExitCode({ findings = [], runState, severityFloor = "major" }) {
+  if (exitCodeForRunState(runState) !== 0) return 1;
+  return ciBlockingFindings(findings, severityFloor).length > 0 ? 1 : 0;
+}
+
+// Pure, JSON-serializable CI summary written to <runDir>/summary.json and
+// echoed to stdout. blocking[] carries the repro script path for each gating
+// finding so the PR comment can link runnable proof.
+export function buildCiSummary({ runId, target = {}, findings = [], runState, severityFloor = "major", generatedAt }) {
+  const blocking = ciBlockingFindings(findings, severityFloor).map((f) => ({
+    id: f.id,
+    title: f.title ?? null,
+    severity: f.severity ?? null,
+    status: f.status,
+    source: f.source ?? null,
+    page: f.evidence?.url ?? null,
+    reproScript: f.reverify?.reproScript ?? null,
+  }));
+  const exitCode = ciExitCode({ findings, runState, severityFloor });
+  return {
+    schemaVersion: 1,
+    runId: runId ?? null,
+    generatedAt: generatedAt ?? null,
+    target: { name: target.name ?? null, url: target.url ?? null },
+    runState: runState ?? null,
+    severityFloor,
+    exitCode,
+    pass: exitCode === 0,
+    counts: countsByStatus(findings),
+    blocking,
+  };
+}
+
+function normalizeSeverityFloor(value) {
+  if (value === undefined) return "major";
+  if (!SEVERITY_FLOORS.includes(value)) {
+    throw new ConfigError(`--severity-floor must be one of ${SEVERITY_FLOORS.join(", ")} — got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+// Terminal step for `run`/`run --sweep`: in --ci mode write summary.json next
+// to report.json and emit it as the single stdout object; otherwise print the
+// human findings table. Sets process.exitCode either way.
+async function finishRun({ flags, config, runDir, findings, runState, mdPath }) {
+  if (!flags.ci) {
+    printSummary(findings, mdPath, runState);
+    process.exitCode = exitCodeForRunState(runState);
+    return;
+  }
+  const severityFloor = normalizeSeverityFloor(flags["severity-floor"]);
+  const summary = buildCiSummary({
+    runId: path.basename(path.resolve(runDir)),
+    target: config.target,
+    findings,
+    runState,
+    severityFloor,
+    generatedAt: new Date().toISOString(),
+  });
+  await fs.writeFile(path.join(runDir, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
+  // Machine-friendly: stdout is exactly this JSON object; all human logs go to stderr.
+  process.stdout.write(JSON.stringify(summary, null, 2) + "\n");
+  process.exitCode = summary.exitCode;
+}
+
 function printSummary(findings, mdPath, runState) {
   const pad = (s, n) => String(s).padEnd(n);
   console.log("");
@@ -305,6 +400,7 @@ async function resolveRunDir(config, flags) {
 
 async function cmdRun(flags) {
   const config = loadConfig(flags.config);
+  if (flags.ci) normalizeSeverityFloor(flags["severity-floor"]); // fail fast before a full crawl
   if (flags.sweep) config.target.sweep = true;
 
   // Sweep mode is deterministic and LLM-free — it never constructs a brain
@@ -328,8 +424,7 @@ async function cmdRun(flags) {
       runDir,
       log,
     });
-    printSummary(finals, mdPath, runState);
-    process.exitCode = exitCodeForRunState(runState);
+    await finishRun({ flags, config, runDir, findings: finals, runState, mdPath });
   });
   // exit 0 regardless of bugs found — bugs are the product, not an error.
   // Nonzero only when runState says exploration itself didn't happen.
@@ -355,8 +450,7 @@ async function cmdRunSweep(config, flags) {
     runDir,
     log,
   });
-  printSummary(finals, mdPath, runState);
-  process.exitCode = exitCodeForRunState(runState);
+  await finishRun({ flags, config, runDir, findings: finals, runState, mdPath });
 }
 
 async function cmdOvernight(flags) {

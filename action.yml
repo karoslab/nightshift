@@ -1,0 +1,180 @@
+name: "NightShift QA"
+description: >-
+  Run NightShift against a preview/PR deploy, upload the run directory, and post
+  a sticky PR comment summarizing confirmed findings. Defaults to a zero-LLM
+  deterministic sweep, so no API key is required.
+author: "NightShift"
+branding:
+  icon: "moon"
+  color: "purple"
+
+inputs:
+  target-url:
+    description: "Full http(s) URL of the deploy to test (e.g. the PR preview URL)."
+    required: true
+  config:
+    description: "Path to a nightshift.config.json (relative to the workspace). Optional — defaults are used when absent. target.url and report.dir are overridden by this action."
+    required: false
+    default: ""
+  severity-floor:
+    description: "Fail the run when a confirmed finding is at or above this severity: minor | major | critical."
+    required: false
+    default: "major"
+  brain:
+    description: "sweep (deterministic, zero-LLM, no key) | subscription-cli | api-key | mock. Default sweep."
+    required: false
+    default: "sweep"
+  report-dir:
+    description: "Directory (relative to the workspace) for run output and the uploaded artifact."
+    required: false
+    default: ".nightshift"
+  artifact-name:
+    description: "Name of the uploaded run-directory artifact."
+    required: false
+    default: "nightshift-run"
+  github-token:
+    description: "Token used to post/update the sticky PR comment. Defaults to the workflow token."
+    required: false
+    default: ${{ github.token }}
+  anthropic-api-key:
+    description: "Optional — only needed when brain is api-key. Exposed to NightShift as ANTHROPIC_API_KEY."
+    required: false
+    default: ""
+  comment:
+    description: "Post/update the sticky PR comment (true/false). Ignored on non-pull_request events."
+    required: false
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+
+    - name: Install NightShift dependencies
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        if [ -f package-lock.json ]; then npm ci; else npm install; fi
+        npx --yes playwright install --with-deps chromium
+
+    # Merge target-url / report-dir / brain over the (optional) base config and
+    # write a validated config for this run. Values are passed via env — never
+    # interpolated into the script body — so a hostile preview URL cannot inject.
+    - name: Prepare NightShift config
+      id: prep
+      shell: bash
+      env:
+        NS_BASE_CONFIG: ${{ inputs.config }}
+        NS_TARGET_URL: ${{ inputs.target-url }}
+        NS_REPORT_DIR: ${{ inputs.report-dir }}
+        NS_BRAIN: ${{ inputs.brain }}
+      run: |
+        export NS_MERGED="${RUNNER_TEMP}/nightshift.ci.config.json"
+        node -e '
+          const fs = require("fs");
+          const p = process.env.NS_BASE_CONFIG;
+          const base = p && fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : {};
+          base.target = { ...(base.target || {}), url: process.env.NS_TARGET_URL };
+          base.report = { ...(base.report || {}), dir: process.env.NS_REPORT_DIR };
+          const brain = process.env.NS_BRAIN;
+          if (brain === "sweep") base.target.sweep = true;
+          else base.brain = { ...(base.brain || {}), mode: brain };
+          fs.writeFileSync(process.env.NS_MERGED, JSON.stringify(base, null, 2));
+        '
+        {
+          echo "config-path=$NS_MERGED"
+          echo "report-dir=$NS_REPORT_DIR"
+        } >> "$GITHUB_OUTPUT"
+
+    # Run NightShift. Capture the exit code instead of letting it abort the
+    # composite action, so the artifact upload and PR comment still run; the
+    # final step re-raises it to fail the check.
+    - name: Run NightShift
+      id: run
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: |
+        set +e
+        node "${{ github.action_path }}/bin/nightshift.mjs" run \
+          --config "${{ steps.prep.outputs.config-path }}" \
+          --ci --severity-floor "${{ inputs.severity-floor }}"
+        code=$?
+        set -e
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        RUN_ID="$(node -e 'const fs=require("fs");const d=process.argv[1];try{process.stdout.write(JSON.parse(fs.readFileSync(d+"/latest.json","utf8")).runId||"")}catch{}' "${{ steps.prep.outputs.report-dir }}")"
+        echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+        echo "run-dir=${{ steps.prep.outputs.report-dir }}/$RUN_ID" >> "$GITHUB_OUTPUT"
+
+    - name: Upload run directory
+      if: ${{ always() && steps.run.outputs.run-id != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}-${{ steps.run.outputs.run-id }}
+        path: ${{ steps.run.outputs.run-dir }}
+        if-no-files-found: warn
+
+    - name: Post sticky PR comment
+      if: ${{ always() && inputs.comment == 'true' && github.event_name == 'pull_request' && steps.run.outputs.run-id != '' }}
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const MARKER = '<!-- nightshift-ci -->';
+          const summaryPath = `${{ steps.run.outputs.run-dir }}/summary.json`;
+          let s;
+          try {
+            s = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+          } catch (e) {
+            core.warning(`NightShift: no summary.json at ${summaryPath}: ${e.message}`);
+            return;
+          }
+
+          const esc = (v) => String(v ?? '').replace(/[|\r\n]/g, ' ');
+          const lines = [];
+          lines.push(MARKER);
+          lines.push('## 🌙 NightShift QA');
+          lines.push('');
+          const tgt = s.target?.url ?? 'the target';
+          if (s.pass) {
+            lines.push(`✅ **No confirmed findings at or above \`${s.severityFloor}\`** on ${esc(tgt)} (run state: \`${s.runState}\`).`);
+          } else if (s.blocking?.length) {
+            lines.push(`❌ **${s.blocking.length} confirmed finding(s) at or above \`${s.severityFloor}\`** on ${esc(tgt)}:`);
+            lines.push('');
+            lines.push('| ID | Severity | Finding | Repro script |');
+            lines.push('| --- | --- | --- | --- |');
+            for (const b of s.blocking) {
+              lines.push(`| ${esc(b.id)} | ${esc(b.severity)} | ${esc(b.title)} | \`${esc(b.reproScript ?? 'n/a')}\` |`);
+            }
+            lines.push('');
+            lines.push('Repro scripts are in the uploaded run-directory artifact; each exits 0 when the bug reproduces.');
+          } else {
+            lines.push(`❌ **Exploration did not complete** (run state: \`${s.runState}\`) — treat this run as a failure, not a pass.`);
+          }
+          lines.push('');
+          const counts = s.counts ?? {};
+          lines.push(`Counts — confirmed: ${counts.confirmed ?? 0} · text-verified: ${counts['text-verified'] ?? 0} · flaky: ${counts.flaky ?? 0} · unconfirmed: ${counts.unconfirmed ?? 0}`);
+          lines.push('');
+          lines.push(`<sub>run \`${esc(s.runId)}\` · severity floor \`${s.severityFloor}\`</sub>`);
+          const body = lines.join('\n');
+
+          const { owner, repo } = context.repo;
+          const issue_number = context.issue.number;
+          const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+          const existing = comments.find((c) => (c.body ?? '').includes(MARKER));
+          if (existing) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+          } else {
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+          }
+
+    - name: Enforce NightShift gate
+      shell: bash
+      run: |
+        code="${{ steps.run.outputs.exit-code }}"
+        echo "NightShift exit code: $code"
+        exit "${code:-1}"
