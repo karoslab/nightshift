@@ -16,6 +16,7 @@ const PINNED_DEFAULTS = {
     actionsPerPage: 6,
     selectorDenylist: [],
     denyActionKinds: [],
+    sweep: false,
   },
   brain: {
     mode: "subscription-cli",
@@ -242,6 +243,12 @@ test("target.denyActionKinds rejects unknown action kinds", () => {
   );
   const ok = loadConfig(writeConfig(tmpDir(), { target: { denyActionKinds: ["fill", "press", "select"] } }));
   assert.deepEqual(ok.target.denyActionKinds, ["fill", "press", "select"]);
+});
+
+test("target.sweep must be a boolean and defaults to false", () => {
+  assertConfigError(() => loadConfig(writeConfig(tmpDir(), { target: { sweep: "yes" } })), /sweep must be a boolean/);
+  assert.equal(loadConfig(writeConfig(tmpDir(), {})).target.sweep, false);
+  assert.equal(loadConfig(writeConfig(tmpDir(), { target: { sweep: true } })).target.sweep, true);
 });
 
 test("security.enabled defaults false; zero behavior change until flipped", () => {
