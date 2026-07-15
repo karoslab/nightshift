@@ -172,6 +172,58 @@ test("sweep runs three input passes (empty, hostile, valid) against every form",
   );
 });
 
+test("sweep resumes an interruption mid-route on a NON-seed route (continues, not restarts)", { timeout: 120_000 }, async (t) => {
+  // "/" links to "/page2"; "/page2"'s LAST button raises a console error. A
+  // budget that expires after the seed route completes interrupts mid-crawl
+  // before "/page2" is swept — so the deep bug is reachable only if resume
+  // re-enqueues the harvested, not-yet-done "/page2" (which is NOT a seed).
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, "http://x");
+    res.writeHead(200, { "content-type": "text/html" });
+    if (u.pathname === "/page2") {
+      res.end(
+        `<html><body><h1>Page 2</h1>
+         <button>one</button>
+         <button>two</button>
+         <button onclick="console.error('page2-deep-bug')">three</button>
+         </body></html>`,
+      );
+      return;
+    }
+    res.end(`<html><body><h1>Home</h1><a href="/page2">Go to page 2</a></body></html>`);
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const runDir = fsSync.mkdtempSync(path.join(ROOT, "node_modules", ".cache", "ns-resume-mid-"));
+  t.after(async () => {
+    await new Promise((r) => server.close(r));
+    fsSync.rmSync(runDir, { recursive: true, force: true });
+  });
+  fsSync.mkdirSync(path.join(runDir, "shots"), { recursive: true });
+  const config = baseConfig(origin, runDir, { maxRoutes: 12 });
+  const hasDeepBug = (findings) =>
+    findings.some((f) => f.source === "oracle:console-error" && /page2-deep-bug/.test(f.failure?.message ?? ""));
+
+  // Interrupt: timeLeft() is true only for the seed route's while-check + its
+  // single element + page2's while-check; the next check (page2's first
+  // element) returns false, ending the run before page2 is exercised.
+  let ticks = 0;
+  const interruptingBudget = { timeLeft: () => (++ticks <= 3), tryConsumeCall: () => true };
+  const first = await runSweep({ config, runDir, log: quietLog, budget: interruptingBudget });
+  assert.ok(!hasDeepBug(first.findings), "the interrupted run must stop before reaching page2's deep bug");
+
+  // Checkpoint must record the interrupted, not-yet-done non-seed route.
+  const ckpt = JSON.parse(fsSync.readFileSync(path.join(runDir, "sweep-checkpoint.json"), "utf8"));
+  assert.ok(ckpt.routesDone.includes(origin + "/"), "the seed route completed and is marked done");
+  assert.equal(ckpt.current?.route, origin + "/page2", "the interrupted route is checkpointed as current");
+  assert.ok(!ckpt.routesDone.includes(origin + "/page2"), "page2 is not yet done");
+
+  // Resume with a normal budget: page2 must now be swept to completion, surfacing
+  // the deep bug — proving resume continued the crawl rather than restarting it.
+  const second = await runSweep({ config, runDir, log: quietLog });
+  assert.ok(hasDeepBug(second.findings), "resume must finish sweeping the interrupted non-seed route and find its bug");
+});
+
 test("sweep resumes from a checkpoint instead of re-sweeping a completed route", { timeout: 60_000 }, async (t) => {
   let hits = 0;
   const server = http.createServer((req, res) => {

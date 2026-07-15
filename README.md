@@ -208,7 +208,7 @@ NightShift is version 0.1.0 and honest about its edges:
 ## Testing
 
 ```bash
-npm test                          # full suite (263 tests)
+npm test                          # full suite (264 tests)
 node --test tests/config.test.mjs # focused module tests
 ```
 
