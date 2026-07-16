@@ -80,6 +80,13 @@ function config() {
             { action: "click", selector: "#add-to-cart" },
           ],
         },
+        {
+          // Gated journey scoped to member only — it must NOT run (and
+          // false-positive on the login redirect) under the anonymous role.
+          name: "member sees their account",
+          roles: ["member"],
+          steps: [{ action: "goto", url: "/account", expect: { textPresent: "Signed in as demo" } }],
+        },
       ],
     },
     budget: { maxLlmCalls: 10, maxMinutes: 5, maxSessionsPerNight: 4, stopAtHour: 6 },
@@ -126,6 +133,11 @@ test("session runs anonymous + auth role, tags findings, persists storageState, 
     (f) => (f.source === "oracle:page-error" || f.source === "oracle:nav-failure") && /\/account/.test(f.evidence?.url ?? ""),
   );
   assert.equal(accountCrash, undefined, "the gated route must not crash the anonymous role");
+
+  // The member-scoped gated journey never runs under anonymous (no false
+  // positive on the login redirect) and passes for member (files nothing).
+  const gated = findings.filter((f) => f.journey === "member sees their account");
+  assert.deepEqual(gated, [], "the member-scoped gated journey must not file any finding: " + JSON.stringify(gated.map((f) => [f.role, f.title])));
 
   // The seeded-broken journey candidate reverifies to confirmed.
   const verified = await reverifyFinding(broken[0], { config: config(), log: quiet });

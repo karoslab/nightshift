@@ -24,12 +24,14 @@
     "journeys": [
       {
         "name": "member can reach their account",
+        "roles": ["member"],
         "steps": [
           { "action": "goto", "url": "/account", "expect": { "textPresent": "Signed in" } }
         ]
       },
       {
         "name": "checkout completes",
+        "roles": ["member"],
         "steps": [
           { "action": "goto", "url": "/cart" },
           { "action": "click", "selector": "#checkout" },

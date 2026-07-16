@@ -134,11 +134,12 @@ can prove.
 By default NightShift explores your app as an anonymous visitor. To cover
 logged-in surfaces, declare **roles** under `target.auth`. On session start
 NightShift logs in once per role, persists a Playwright `storageState` per role
-under the run dir (`.nightshift/<runId>/auth/<role>.json`), and then runs
-exploration, sweep, and journeys **once per role** — every finding is tagged
-with the role that produced it. Anonymous remains the implicit default role and
-always runs; a role whose login fails is skipped with a warning, never
-discarding the anonymous pass.
+under the run dir (`.nightshift/<runId>/auth/<role>.json`), and then runs the
+Claude-guided **exploration and journeys once per role** — every finding is
+tagged with the role that produced it. Anonymous remains the implicit default
+role and always runs; a role whose login fails is skipped with a warning, never
+discarding the anonymous pass. (Deterministic [sweep mode](#sweep-mode-deterministic-no-llm)
+is anonymous-only for now — it does not yet run per role.)
 
 ```json
 "target": {
@@ -192,6 +193,7 @@ standalone repro script too.
   "journeys": [
     {
       "name": "checkout completes",
+      "roles": ["member"],
       "steps": [
         { "action": "goto", "url": "/cart" },
         { "action": "click", "selector": "#checkout" },
@@ -210,8 +212,11 @@ standalone repro script too.
   expectation becomes a text-verified finding; a step that fails to execute, or
   an oracle that fires mid-journey (page crash, 5xx, dead link), becomes a
   candidate that reverify can confirm.
-- Journeys run **per role**, so a checkout journey runs under each authenticated
-  role you declared as well as anonymous.
+- Journeys run **per role**. By default a journey runs under every role
+  (anonymous plus each authenticated role). Add a `roles` list (names of
+  declared `target.auth` roles and/or `"anonymous"`) to scope a journey — a
+  login-gated journey like the one above should list only the roles that can
+  reach it, so it never runs (and false-positives) as anonymous.
 
 ## Architecture
 
@@ -304,7 +309,7 @@ NightShift is version 0.1.0 and honest about its edges:
 ## Testing
 
 ```bash
-npm test                          # full suite (298 tests)
+npm test                          # full suite (300 tests)
 node --test tests/config.test.mjs # focused module tests
 ```
 

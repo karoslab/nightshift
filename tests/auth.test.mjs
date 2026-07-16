@@ -134,3 +134,13 @@ test("establishRoleSessions returns [] when no auth is configured", async (t) =>
   const config = { target: { url: origin, auth: { roles: [] } } };
   assert.deepEqual(await establishRoleSessions({ config, browser, runDir, env }), []);
 });
+
+test("establishRoleSessions skips a role whose login fails without dropping the others", { timeout: 60_000 }, async (t) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "ns-auth-"));
+  t.after(() => fs.rmSync(runDir, { recursive: true, force: true }));
+  // First role references a missing env var (login throws); second role is fine.
+  const broken = { ...memberRole, name: "broken", usernameEnv: "NS_MISSING_USER" };
+  const config = { target: { url: origin, auth: { roles: [broken, memberRole] } }, reverify: { navTimeoutMs: 15000 } };
+  const sessions = await establishRoleSessions({ config, browser, runDir, env });
+  assert.deepEqual(sessions.map((s) => s.name), ["member"], "the failing role is skipped, the good role survives");
+});

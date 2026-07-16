@@ -402,6 +402,30 @@ test("target.journeys rejects unknown step actions and empty steps", () => {
   );
 });
 
+test("target.journeys roles scope must name anonymous or a declared auth role", () => {
+  const role = { name: "member", loginUrl: "/l", steps: [{ action: "click", selector: "#x" }] };
+  const base = { target: { auth: { roles: [role] } } };
+  // "anonymous" and a declared role are accepted.
+  const ok = loadConfig(writeConfig(tmpDir(), {
+    target: { ...base.target, journeys: [{ name: "j", roles: ["anonymous", "member"], steps: [{ action: "goto", url: "/" }] }] },
+  }));
+  assert.deepEqual(ok.target.journeys[0].roles, ["anonymous", "member"]);
+  // An undeclared role name is rejected.
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), {
+      target: { ...base.target, journeys: [{ name: "j", roles: ["admin"], steps: [{ action: "goto", url: "/" }] }] },
+    })),
+    /not "anonymous" or a declared target\.auth role/,
+  );
+  // An empty roles array is rejected (scopes the journey to nothing).
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), {
+      target: { ...base.target, journeys: [{ name: "j", roles: [], steps: [{ action: "goto", url: "/" }] }] },
+    })),
+    /non-empty array of role names/,
+  );
+});
+
 test("target.journeys expect must assert at least one thing and reject unknown keys", () => {
   assertConfigError(
     () => loadConfig(writeConfig(tmpDir(), { target: { journeys: [{ name: "x", steps: [{ action: "goto", url: "/", expect: {} }] }] } })),
