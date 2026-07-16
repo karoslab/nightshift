@@ -12,9 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Residue check
+        env:
+          RESIDUE_DENYLIST: ${{ secrets.RESIDUE_DENYLIST }}
         run: |
-          if grep -rIEnf scripts/residue-denylist.txt . --exclude-dir=.git --exclude=residue-denylist.txt; then
-            echo "Personal/internal residue found (see matches above)"; exit 1
+          # Patterns live in a repo secret; secrets are absent on fork PRs, so skip there.
+          if [ -z "$RESIDUE_DENYLIST" ]; then echo "denylist unavailable; skipping"; exit 0; fi
+          printf '%s\n' "$RESIDUE_DENYLIST" > "$RUNNER_TEMP/denylist.txt"
+          # -l only: never echo matched pattern text into public CI logs.
+          if grep -rIlEf "$RUNNER_TEMP/denylist.txt" . --exclude-dir=.git; then
+            echo "Personal/internal residue found in the files listed above"; exit 1
           fi
       - uses: actions/setup-node@v4
         with:
