@@ -178,6 +178,11 @@ is anonymous-only for now — it does not yet run per role.)
 - **`nightshift doctor`** validates auth end to end: every declared credential
   env var is present, each role actually logs in, and its `storageState` comes
   back non-empty.
+- **Budget is per session, not per role.** `budget.maxLlmCalls` / `maxMinutes`
+  are split evenly across the roles that run (anonymous plus each authenticated
+  role), so adding roles never multiplies your configured Claude spend cap —
+  three roles each get a third of the calls and minutes. The split is logged at
+  session start.
 
 ## Journeys (deterministic critical paths)
 
@@ -309,7 +314,7 @@ NightShift is version 0.1.0 and honest about its edges:
 ## Testing
 
 ```bash
-npm test                          # full suite (300 tests)
+npm test                          # full suite (302 tests)
 node --test tests/config.test.mjs # focused module tests
 ```
 

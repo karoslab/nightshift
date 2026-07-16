@@ -7,7 +7,7 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runSession, createIdMinter } from "../lib/session.mjs";
+import { runSession, createIdMinter, subdivideBudget } from "../lib/session.mjs";
 
 let serverA;
 let originA;
@@ -238,6 +238,20 @@ test("a harvested ?query anchor does not whitelist a brain-invented goto to the 
   });
   const deadLinks = findings.filter((f) => f.source === "oracle:dead-link");
   assert.deepEqual(deadLinks, [], "brain-invented goto 404 must never file dead-link: " + JSON.stringify(findings.map((f) => f.title)));
+});
+
+test("subdivideBudget splits the session caps across roles so the total is never multiplied", () => {
+  // One role (anonymous only) leaves the config caps untouched.
+  assert.deepEqual(subdivideBudget({ maxLlmCalls: 40, maxMinutes: 45 }, 1), { maxLlmCalls: 40, maxMinutes: 45 });
+  // Two roles: floor(40/2)=20 calls, floor(45/2)=22 min each — 40 calls / ~44 min total.
+  assert.deepEqual(subdivideBudget({ maxLlmCalls: 40, maxMinutes: 45 }, 2), { maxLlmCalls: 20, maxMinutes: 22 });
+  assert.deepEqual(subdivideBudget({ maxLlmCalls: 40, maxMinutes: 45 }, 4), { maxLlmCalls: 10, maxMinutes: 11 });
+  // A tiny cap never floors a role to zero.
+  const tiny = subdivideBudget({ maxLlmCalls: 1, maxMinutes: 1 }, 3);
+  assert.equal(tiny.maxLlmCalls, 1);
+  assert.equal(tiny.maxMinutes, 1);
+  // Sibling budget keys are preserved.
+  assert.equal(subdivideBudget({ maxLlmCalls: 40, maxMinutes: 45, stopAtHour: 6 }, 2).stopAtHour, 6);
 });
 
 test("stats count successful vs failed brain turns instead of only logging-and-continuing", { timeout: 60_000 }, async (t) => {

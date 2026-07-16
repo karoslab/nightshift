@@ -39,6 +39,24 @@ function idleBrain() {
   };
 }
 
+// A brain that always proposes another action (never done) so it drains the
+// call budget — used to prove the budget is shared across roles, not per role.
+function greedyBrain() {
+  return {
+    mode: "mock",
+    model: "greedy",
+    async ask() {
+      return {
+        ok: true,
+        json: { action: { kind: "click", elementId: 0, why: "keep going" }, findings: [], done: false },
+        rawText: "{}",
+        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+      };
+    },
+    async close() {},
+  };
+}
+
 function tmpRunDir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ns-session-auth-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -142,4 +160,29 @@ test("session runs anonymous + auth role, tags findings, persists storageState, 
   // The seeded-broken journey candidate reverifies to confirmed.
   const verified = await reverifyFinding(broken[0], { config: config(), log: quiet });
   assert.equal(verified.status, "confirmed", JSON.stringify(verified.reverify));
+});
+
+test("the session LLM budget is shared across roles, not multiplied per role", { timeout: 120_000 }, async (t) => {
+  const runDir = tmpRunDir(t);
+  const cfg = config();
+  cfg.budget.maxLlmCalls = 4; // 2 roles (anonymous + member) -> floor(4/2)=2 calls each
+  cfg.target.actionsPerPage = 10; // plenty of headroom so the CALL budget is the binding limit
+  cfg.target.journeys = []; // isolate exploration budget (journeys make no brain calls)
+
+  const { stats } = await runSession({
+    config: cfg,
+    brain: greedyBrain(),
+    runDir,
+    log: quiet,
+    mintId: createIdMinter(),
+    env,
+  });
+
+  assert.deepEqual(stats.rolesExplored, ["anonymous", "member"]);
+  // The whole point: total calls stay within the configured cap (4), NOT 2x it.
+  assert.ok(
+    stats.llmCalls <= cfg.budget.maxLlmCalls,
+    `total LLM calls ${stats.llmCalls} must not exceed the configured cap ${cfg.budget.maxLlmCalls}`,
+  );
+  assert.equal(stats.llmCalls, 4, "each of the 2 roles gets floor(4/2)=2 calls, 4 total");
 });
