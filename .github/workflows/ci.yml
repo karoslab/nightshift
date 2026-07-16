@@ -15,8 +15,8 @@ jobs:
         env:
           RESIDUE_DENYLIST: ${{ secrets.RESIDUE_DENYLIST }}
         run: |
-          # Patterns live in a repo secret; secrets are absent on fork PRs, so skip there.
-          if [ -z "$RESIDUE_DENYLIST" ]; then echo "denylist unavailable; skipping"; exit 0; fi
+          # Fail-closed: no denylist available (e.g. fork PRs) = red build, never a skip.
+          if [ -z "$RESIDUE_DENYLIST" ]; then echo "residue denylist unavailable - failing closed"; exit 1; fi
           printf '%s\n' "$RESIDUE_DENYLIST" > "$RUNNER_TEMP/denylist.txt"
           # -l only: never echo matched pattern text into public CI logs.
           if grep -rIlEf "$RUNNER_TEMP/denylist.txt" . --exclude-dir=.git; then
