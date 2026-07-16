@@ -17,6 +17,8 @@ const PINNED_DEFAULTS = {
     selectorDenylist: [],
     denyActionKinds: [],
     sweep: false,
+    auth: { roles: [] },
+    journeys: [],
   },
   brain: {
     mode: "subscription-cli",
@@ -293,4 +295,144 @@ test("two loads never share mutable state", () => {
   a.oracles.ignoreConsole.push("x");
   assert.deepEqual(b.target.routes, ["/"]);
   assert.equal(b.oracles.ignoreConsole.length, 3);
+});
+
+// ---------------------------------------------------------------------------
+// target.auth
+// ---------------------------------------------------------------------------
+test("target.auth defaults to an empty roles list (anonymous-only)", () => {
+  const config = inDir(tmpDir(), () => loadConfig());
+  assert.deepEqual(config.target.auth, { roles: [] });
+});
+
+test("target.auth accepts a valid steps-based role and keeps only env-var NAMES", () => {
+  const role = {
+    name: "member",
+    loginUrl: "/login",
+    usernameEnv: "NS_MEMBER_USER",
+    passwordEnv: "NS_MEMBER_PASS",
+    totpSecretEnv: "NS_MEMBER_TOTP",
+    steps: [
+      { action: "fill", selector: "#username", valueFrom: "username" },
+      { action: "fill", selector: "#password", valueFrom: "password" },
+      { action: "fill", selector: "#otp", valueFrom: "totp" },
+      { action: "click", selector: "#login" },
+    ],
+  };
+  const config = loadConfig(writeConfig(tmpDir(), { target: { auth: { roles: [role] } } }));
+  assert.equal(config.target.auth.roles[0].name, "member");
+  // The stored config carries names, not secret values.
+  assert.equal(config.target.auth.roles[0].usernameEnv, "NS_MEMBER_USER");
+});
+
+test("target.auth rejects the reserved role name 'anonymous'", () => {
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { target: { auth: { roles: [{ name: "anonymous", loginUrl: "/l", steps: [{ action: "click", selector: "#x" }] }] } } })),
+    /reserved/,
+  );
+});
+
+test("target.auth rejects duplicate role names", () => {
+  const r = { name: "member", loginUrl: "/l", steps: [{ action: "click", selector: "#x" }] };
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { target: { auth: { roles: [r, { ...r }] } } })),
+    /unique/,
+  );
+});
+
+test("target.auth requires exactly one of steps or setupScript", () => {
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { target: { auth: { roles: [{ name: "m", loginUrl: "/l" }] } } })),
+    /exactly one of "steps"/,
+  );
+  const ok = loadConfig(writeConfig(tmpDir(), { target: { auth: { roles: [{ name: "m", setupScript: "./login.mjs" }] } } }));
+  assert.equal(ok.target.auth.roles[0].setupScript, "./login.mjs");
+});
+
+test("target.auth env fields must be NAMES, not values with spaces or symbols", () => {
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { target: { auth: { roles: [{ name: "m", loginUrl: "/l", usernameEnv: "secret-value!", steps: [{ action: "click", selector: "#x" }] }] } } })),
+    /ENVIRONMENT VARIABLE NAME/,
+  );
+});
+
+test("target.auth valueFrom must have a matching env field on the role", () => {
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { target: { auth: { roles: [{ name: "m", loginUrl: "/l", steps: [{ action: "fill", selector: "#u", valueFrom: "username" }] }] } } })),
+    /requires .*usernameEnv/,
+  );
+});
+
+test("target.auth step goto must be same-origin", () => {
+  const cfg = { target: { url: "http://localhost:3000", auth: { roles: [{ name: "m", loginUrl: "/l", steps: [{ action: "goto", url: "http://evil.example/x" }] }] } } };
+  assertConfigError(() => loadConfig(writeConfig(tmpDir(), cfg)), /same-origin/);
+});
+
+// ---------------------------------------------------------------------------
+// target.journeys
+// ---------------------------------------------------------------------------
+test("target.journeys defaults to an empty array", () => {
+  const config = inDir(tmpDir(), () => loadConfig());
+  assert.deepEqual(config.target.journeys, []);
+});
+
+test("target.journeys accepts a valid journey with expects", () => {
+  const journeys = [
+    {
+      name: "view account",
+      steps: [
+        { action: "goto", url: "/account" },
+        { action: "click", selector: "#refresh", expect: { textPresent: "Signed in", selector: "#who" } },
+        { action: "fill", selector: "#note", value: "hi", expect: { urlIncludes: "/account" } },
+      ],
+    },
+  ];
+  const config = loadConfig(writeConfig(tmpDir(), { target: { journeys } }));
+  assert.equal(config.target.journeys[0].steps.length, 3);
+});
+
+test("target.journeys rejects unknown step actions and empty steps", () => {
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { target: { journeys: [{ name: "x", steps: [] }] } })),
+    /non-empty array/,
+  );
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { target: { journeys: [{ name: "x", steps: [{ action: "teleport", selector: "#a" }] }] } })),
+    /action must be one of/,
+  );
+});
+
+test("target.journeys roles scope must name anonymous or a declared auth role", () => {
+  const role = { name: "member", loginUrl: "/l", steps: [{ action: "click", selector: "#x" }] };
+  const base = { target: { auth: { roles: [role] } } };
+  // "anonymous" and a declared role are accepted.
+  const ok = loadConfig(writeConfig(tmpDir(), {
+    target: { ...base.target, journeys: [{ name: "j", roles: ["anonymous", "member"], steps: [{ action: "goto", url: "/" }] }] },
+  }));
+  assert.deepEqual(ok.target.journeys[0].roles, ["anonymous", "member"]);
+  // An undeclared role name is rejected.
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), {
+      target: { ...base.target, journeys: [{ name: "j", roles: ["admin"], steps: [{ action: "goto", url: "/" }] }] },
+    })),
+    /not "anonymous" or a declared target\.auth role/,
+  );
+  // An empty roles array is rejected (scopes the journey to nothing).
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), {
+      target: { ...base.target, journeys: [{ name: "j", roles: [], steps: [{ action: "goto", url: "/" }] }] },
+    })),
+    /non-empty array of role names/,
+  );
+});
+
+test("target.journeys expect must assert at least one thing and reject unknown keys", () => {
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { target: { journeys: [{ name: "x", steps: [{ action: "goto", url: "/", expect: {} }] }] } })),
+    /at least one of/,
+  );
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { target: { journeys: [{ name: "x", steps: [{ action: "goto", url: "/", expect: { nope: "1" } }] }] } })),
+    /unknown key/,
+  );
 });
