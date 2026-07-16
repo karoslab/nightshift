@@ -9,15 +9,29 @@
 //   3. "Warranty info" -> 404 (dead link from a real anchor href).
 //   4. "Apply coupon" renders "Total: NaN" into #total (semantic bug).
 //   5. /about is clean — the zero-findings false-positive canary.
-// Deterministic: no randomness, no time dependence, and NO server-side state
-// at all (all bug state lives in per-page JS, so fresh contexts start clean).
-// Binds 127.0.0.1 explicitly (never exposed to the LAN).
+// Auth fixtures (for `target.auth` / `target.journeys` demos and tests):
+//   - /login serves a login form (#username, #password, #login) that POSTs to
+//     /api/login. Correct creds (DEMO_CREDENTIALS) set cookie bugbox_auth=ok
+//     and the page redirects to /account. Wrong creds -> 401 (an expected auth
+//     status, never a finding).
+//   - /account is GATED: authenticated (cookie present) -> 200 account page;
+//     anonymous -> 302 redirect to /login (redirected, never crashed).
+// The pinned home/about/404 pages are UNCHANGED — no anchors point at the auth
+// routes, so the anonymous crawl never wanders into them.
+// Deterministic: no randomness, no time dependence, and NO cross-request
+// server state (auth is a single fixed cookie, all bug state lives in per-page
+// JS, so fresh contexts start clean). Binds 127.0.0.1 explicitly.
 
 import http from "node:http";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 export const DEFAULT_PORT = 4185;
+
+// Seeded demo credentials. Point a role's usernameEnv/passwordEnv at env vars
+// holding these to log in against the demo. Never a real secret.
+export const DEMO_CREDENTIALS = Object.freeze({ username: "demo", password: "swordfish" });
+const AUTH_COOKIE = "bugbox_auth=ok";
 
 const STYLE = `
   body { font: 16px/1.6 -apple-system, "Segoe UI", sans-serif; background: #101418;
@@ -104,12 +118,97 @@ const PAGE_404 = `<!doctype html>
 </body>
 </html>`;
 
-function handleRequest(req, res) {
+const PAGE_LOGIN = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Sign in — Bugbox</title><style>${STYLE}</style></head>
+<body>
+<h1>Sign in to Bugbox</h1>
+<form id="login-form">
+  <p><label>Username <input id="username" name="username" autocomplete="username"></label></p>
+  <p><label>Password <input id="password" name="password" type="password" autocomplete="current-password"></label></p>
+  <button id="login" type="submit">Sign in</button>
+</form>
+<p id="login-error"></p>
+<script>
+  document.getElementById("login-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    fetch("/api/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value,
+      }),
+    }).then(function (res) {
+      if (res.ok) { window.location = "/account"; }
+      else { document.getElementById("login-error").textContent = "Invalid credentials."; }
+    });
+  });
+</script>
+</body>
+</html>`;
+
+const PAGE_ACCOUNT = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Your account — Bugbox</title><style>${STYLE}</style></head>
+<body>
+<nav><a href="/">Shop</a></nav>
+<h1>Your account</h1>
+<p id="who">Signed in as demo</p>
+<p>This aisle is only open to signed-in shoppers.</p>
+</body>
+</html>`;
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let data = "";
+    req.on("data", (chunk) => {
+      data += chunk;
+      if (data.length > 10_000) data = data.slice(0, 10_000); // demo-scale guard
+    });
+    req.on("end", () => resolve(data));
+    req.on("error", () => resolve(""));
+  });
+}
+
+function isAuthed(req) {
+  const cookie = req.headers.cookie || "";
+  return cookie.split(/;\s*/).includes(AUTH_COOKIE);
+}
+
+async function handleRequest(req, res) {
   const send = (status, contentType, body) => {
     res.writeHead(status, { "Content-Type": contentType });
     res.end(body);
   };
   const { pathname } = new URL(req.url, "http://127.0.0.1");
+  if (pathname === "/login") return send(200, "text/html; charset=utf-8", PAGE_LOGIN);
+  if (pathname === "/api/login") {
+    if (req.method !== "POST") {
+      res.writeHead(405, { "Content-Type": "application/json", Allow: "POST" });
+      return res.end(JSON.stringify({ ok: false, error: "method not allowed" }));
+    }
+    let creds = {};
+    try {
+      creds = JSON.parse(await readBody(req));
+    } catch {
+      creds = {};
+    }
+    const ok = creds.username === DEMO_CREDENTIALS.username && creds.password === DEMO_CREDENTIALS.password;
+    if (!ok) {
+      // 401 is a declared expected auth status — a wrong-password probe is not a bug.
+      res.writeHead(401, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ ok: false, error: "invalid credentials" }));
+    }
+    res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `${AUTH_COOKIE}; Path=/` });
+    return res.end(JSON.stringify({ ok: true }));
+  }
+  if (pathname === "/account") {
+    if (isAuthed(req)) return send(200, "text/html; charset=utf-8", PAGE_ACCOUNT);
+    // Anonymous: redirect to login (never a crash, never a 4xx/5xx).
+    res.writeHead(302, { Location: "/login" });
+    return res.end();
+  }
   if (pathname === "/") {
     // Seeded security fixture (opt-in `security.enabled` loadout only, never
     // read by the default functional session): a session cookie with none of
@@ -128,7 +227,16 @@ function handleRequest(req, res) {
 }
 
 export function startBugbox(port = DEFAULT_PORT) {
-  const server = http.createServer(handleRequest);
+  const server = http.createServer((req, res) => {
+    handleRequest(req, res).catch(() => {
+      try {
+        if (!res.headersSent) res.writeHead(500);
+        res.end();
+      } catch {
+        // response already torn down
+      }
+    });
+  });
   return new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => {

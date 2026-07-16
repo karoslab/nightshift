@@ -5,7 +5,41 @@
     "routes": ["/"],
     "maxRoutes": 12,
     "actionsPerPage": 6,
-    "sweep": false
+    "sweep": false,
+    "auth": {
+      "roles": [
+        {
+          "name": "member",
+          "loginUrl": "/login",
+          "usernameEnv": "NIGHTSHIFT_MEMBER_USER",
+          "passwordEnv": "NIGHTSHIFT_MEMBER_PASS",
+          "steps": [
+            { "action": "fill", "selector": "#username", "valueFrom": "username" },
+            { "action": "fill", "selector": "#password", "valueFrom": "password" },
+            { "action": "click", "selector": "button[type=submit]" }
+          ]
+        }
+      ]
+    },
+    "journeys": [
+      {
+        "name": "member can reach their account",
+        "roles": ["member"],
+        "steps": [
+          { "action": "goto", "url": "/account", "expect": { "textPresent": "Signed in" } }
+        ]
+      },
+      {
+        "name": "checkout completes",
+        "roles": ["member"],
+        "steps": [
+          { "action": "goto", "url": "/cart" },
+          { "action": "click", "selector": "#checkout" },
+          { "action": "fill", "selector": "#card", "value": "4242424242424242" },
+          { "action": "click", "selector": "#place-order", "expect": { "textPresent": "Order confirmed" } }
+        ]
+      }
+    ]
   },
   "brain": {
     "mode": "subscription-cli",

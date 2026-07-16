@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { startBugbox, resolvePort, DEFAULT_PORT } from "../demo-app/server.mjs";
+import { startBugbox, resolvePort, DEFAULT_PORT, DEMO_CREDENTIALS } from "../demo-app/server.mjs";
 
 const SERVER_PATH = fileURLToPath(new URL("../demo-app/server.mjs", import.meta.url));
 
@@ -73,6 +73,49 @@ test("/about is clean: 200, no scripts, no bug references", async () => {
 
 test("unknown routes 404", async () => {
   assert.equal((await fetch(`${base}/admin`)).status, 404);
+});
+
+test("home/about/404 are unchanged: no anchors point at the auth routes", async () => {
+  const home = await (await fetch(`${base}/`)).text();
+  assert.ok(!home.includes("/login"), "home must not link to /login (keeps the anonymous crawl out of auth pages)");
+  assert.ok(!home.includes("/account"), "home must not link to /account");
+});
+
+test("/login serves the pinned login form (#username, #password, #login)", async () => {
+  const res = await fetch(`${base}/login`);
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.ok(html.includes('id="username"'));
+  assert.ok(html.includes('id="password"'));
+  assert.ok(html.includes('id="login"'));
+});
+
+test("/api/login: correct creds set a cookie; wrong creds return an expected 401", async () => {
+  const good = await fetch(`${base}/api/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(DEMO_CREDENTIALS),
+  });
+  assert.equal(good.status, 200);
+  assert.match(good.headers.get("set-cookie") ?? "", /bugbox_auth=ok/);
+
+  const bad = await fetch(`${base}/api/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "demo", password: "nope" }),
+  });
+  assert.equal(bad.status, 401);
+  assert.equal(bad.headers.get("set-cookie"), null, "a failed login must not set an auth cookie");
+});
+
+test("/account is gated: anonymous redirects to /login, authenticated gets 200", async () => {
+  const anon = await fetch(`${base}/account`, { redirect: "manual" });
+  assert.equal(anon.status, 302);
+  assert.equal(anon.headers.get("location"), "/login");
+
+  const authed = await fetch(`${base}/account`, { headers: { cookie: "bugbox_auth=ok" } });
+  assert.equal(authed.status, 200);
+  assert.ok((await authed.text()).includes("Signed in as demo"));
 });
 
 test("resolvePort: --port beats BUGBOX_PORT beats default 4185; 0 allowed", () => {

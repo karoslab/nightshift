@@ -255,3 +255,97 @@ test("cli: unknown command exits 1 with usage", async () => {
   assert.match(res.stderr, /unknown command: bogus/);
   assert.match(res.stderr, /usage: nightshift/);
 });
+
+// ---------------------------------------------------------------------------
+// target.auth validation
+// ---------------------------------------------------------------------------
+const memberRole = {
+  name: "member",
+  loginUrl: "/login",
+  usernameEnv: "NS_U",
+  passwordEnv: "NS_P",
+  steps: [
+    { action: "fill", selector: "#username", valueFrom: "username" },
+    { action: "click", selector: "#login" },
+  ],
+};
+
+function authConfig(dir, port) {
+  return writeConfig(dir, {
+    target: { url: `http://127.0.0.1:${port}`, auth: { roles: [memberRole] } },
+    brain: { mode: "mock" },
+  });
+}
+
+test("doctor: no auth check when no roles are configured", async () => {
+  const server = await listenEphemeral();
+  try {
+    const dir = tmpDir();
+    const configPath = writeConfig(dir, { target: { url: `http://127.0.0.1:${server.address().port}` }, brain: { mode: "mock" } });
+    const { checks } = await runDoctor({ configPath, env: {}, launchChromium: stubChromium });
+    assert.equal(checks.find((c) => c.name.startsWith("auth:")), undefined);
+  } finally {
+    server.close();
+  }
+});
+
+test("doctor: auth fails when a credential env var is missing (and never echoes values)", async () => {
+  const server = await listenEphemeral();
+  try {
+    const dir = tmpDir();
+    const configPath = authConfig(dir, server.address().port);
+    const { ok, checks } = await runDoctor({
+      configPath,
+      env: { NS_U: "demo" }, // NS_P missing
+      launchChromium: stubChromium,
+      loginRoleImpl: async () => {
+        throw new Error("login should not be attempted when env vars are missing");
+      },
+    });
+    assert.equal(ok, false);
+    const c = check(checks, "auth:member");
+    assert.equal(c.status, "fail");
+    assert.match(c.message, /NS_P/);
+    assert.ok(!c.message.includes("demo"), "must not echo credential values");
+  } finally {
+    server.close();
+  }
+});
+
+test("doctor: auth passes when login yields a non-empty storageState", async () => {
+  const server = await listenEphemeral();
+  try {
+    const dir = tmpDir();
+    const configPath = authConfig(dir, server.address().port);
+    const { ok, checks } = await runDoctor({
+      configPath,
+      env: { NS_U: "demo", NS_P: "swordfish" },
+      launchChromium: stubChromium,
+      loginRoleImpl: async () => ({ storageState: { cookies: [{ name: "s", value: "1" }], origins: [] } }),
+    });
+    assert.equal(ok, true, JSON.stringify(checks, null, 2));
+    assert.equal(check(checks, "auth:member").status, "ok");
+  } finally {
+    server.close();
+  }
+});
+
+test("doctor: auth fails when login yields an empty storageState", async () => {
+  const server = await listenEphemeral();
+  try {
+    const dir = tmpDir();
+    const configPath = authConfig(dir, server.address().port);
+    const { ok, checks } = await runDoctor({
+      configPath,
+      env: { NS_U: "demo", NS_P: "wrong" },
+      launchChromium: stubChromium,
+      loginRoleImpl: async () => ({ storageState: { cookies: [], origins: [] } }),
+    });
+    assert.equal(ok, false);
+    const c = check(checks, "auth:member");
+    assert.equal(c.status, "fail");
+    assert.match(c.message, /empty storageState/);
+  } finally {
+    server.close();
+  }
+});
