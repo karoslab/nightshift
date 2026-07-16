@@ -343,6 +343,56 @@ test("api-key: unparseable success body yields ok:false", async () => {
   });
 });
 
+test("api-key: circuit breaker trips after repeated errors and skips fetch entirely", async () => {
+  let calls = 0;
+  const stubFetch = async () => {
+    calls += 1;
+    return { ok: false, status: 500, text: async () => "boom" };
+  };
+  await withEnv({ NS_TEST_ANTHROPIC_KEY: "sk-test-123" }, async () => {
+    const brain = createBrain(apiConfig(), { fetch: stubFetch });
+    // Default minSamples is 10 — drive 10 failures to trip the breaker.
+    for (let i = 0; i < 10; i++) await brain.ask({ system: "s", user: "u" });
+    assert.equal(calls, 10);
+
+    const tripped = await brain.ask({ system: "s", user: "u" });
+    assert.equal(tripped.ok, false);
+    assert.match(tripped.rawText, /circuit breaker/i);
+    assert.equal(calls, 10); // fetch was NOT called this time
+    await brain.close();
+  });
+});
+
+test("api-key: circuit breaker half-opens after cooldown and recovers on success", async () => {
+  let mode = "fail";
+  let calls = 0;
+  const stubFetch = async () => {
+    calls += 1;
+    if (mode === "fail") return { ok: false, status: 500, text: async () => "boom" };
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ content: [{ type: "text", text: '{"done":true}' }], usage: {} }),
+    };
+  };
+  let now = 0;
+  const clock = () => now;
+  await withEnv({ NS_TEST_ANTHROPIC_KEY: "sk-test-123" }, async () => {
+    const brain = createBrain(apiConfig(), { fetch: stubFetch, clock });
+    for (let i = 0; i < 10; i++) await brain.ask({ system: "s", user: "u" });
+    const tripped = await brain.ask({ system: "s", user: "u" });
+    assert.equal(tripped.ok, false);
+    assert.equal(calls, 10); // breaker skipped the 11th call
+
+    mode = "success";
+    now += 30_000; // advance past the cooldown
+    const recovered = await brain.ask({ system: "s", user: "u" });
+    assert.equal(recovered.ok, true); // half-open probe succeeded
+    assert.equal(calls, 11);
+    await brain.close();
+  });
+});
+
 // ---------------------------------------------------------------------- mock
 
 test("mock brain: pops scripted replies in order, then returns {done:true}", async () => {
