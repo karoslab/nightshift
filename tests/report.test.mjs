@@ -449,3 +449,63 @@ test("writeReport writes repro scripts itself (static reprogen import — no ver
   const md = fs.readFileSync(mdPath, "utf8");
   assert.ok(md.includes("repro/NS-021.mjs"), "report.md must reference the repro script");
 });
+
+test("writeReport captures a local evidence snapshot for confirmed findings only", (t) => {
+  const base = tmpBase(t);
+  const { runDir } = createRun({ report: { dir: base } });
+  const confirmed = makeFinding({ id: "NS-030", status: "confirmed" });
+  const flaky = makeFinding({
+    id: "NS-031", status: "flaky",
+    reverify: { replays: 2, reproduced: 1, verdicts: ["reproduced", "not-reproduced"], minimized: false, reproScript: null },
+  });
+  const calls = [];
+  const captureEvidence = ({ repoDir, evidenceDir }) => {
+    calls.push({ repoDir, evidenceDir });
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    fs.writeFileSync(path.join(evidenceDir, "snapshot.tar.gz"), "fake-archive");
+    const manifest = { archive: "snapshot.tar.gz", sha256: "deadbeef", capturedAt: "2026-07-15T00:00:00.000Z", headSha: "abc123", branch: "main" };
+    fs.writeFileSync(path.join(evidenceDir, "manifest.json"), JSON.stringify(manifest));
+    return { archivePath: path.join(evidenceDir, "snapshot.tar.gz"), manifest };
+  };
+
+  const { jsonPath, mdPath } = writeReport(runDir, {
+    config: { target: { name: "Bugbox", url: "http://127.0.0.1:4185" } },
+    findings: [confirmed, flaky],
+    stats: { usage: {} },
+    brainMeta: { mode: "mock", model: "scripted" },
+    repoDir: "/fake/repo",
+    captureEvidence,
+  });
+
+  assert.equal(calls.length, 1, "evidence is captured once, only for the confirmed finding");
+  assert.equal(calls[0].repoDir, "/fake/repo");
+  assert.equal(calls[0].evidenceDir, path.join(runDir, "evidence", "NS-030"));
+  assert.ok(fs.existsSync(path.join(runDir, "evidence", "NS-030", "snapshot.tar.gz")));
+  assert.ok(fs.existsSync(path.join(runDir, "evidence", "NS-030", "manifest.json")));
+  assert.ok(!fs.existsSync(path.join(runDir, "evidence", "NS-031")), "flaky findings get no evidence snapshot");
+
+  const parsed = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+  const jsonFinding = parsed.findings.find((f) => f.id === "NS-030");
+  assert.equal(jsonFinding.evidenceSnapshot.sha256, "deadbeef");
+  assert.equal(jsonFinding.evidenceSnapshot.dir, "evidence/NS-030");
+
+  const md = fs.readFileSync(mdPath, "utf8");
+  assert.match(md, /Evidence snapshot: evidence\/NS-030\/snapshot\.tar\.gz \(sha256 deadbeef\)/);
+});
+
+test("writeReport tolerates a failed evidence capture without sinking the report", (t) => {
+  const base = tmpBase(t);
+  const { runDir } = createRun({ report: { dir: base } });
+  const confirmed = makeFinding({ id: "NS-032", status: "confirmed" });
+  const { jsonPath } = writeReport(runDir, {
+    config: { target: { name: "Bugbox", url: "http://127.0.0.1:4185" } },
+    findings: [confirmed],
+    stats: { usage: {} },
+    brainMeta: { mode: "mock", model: "scripted" },
+    captureEvidence: () => {
+      throw new Error("no git here");
+    },
+  });
+  const parsed = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+  assert.equal(parsed.findings[0].evidenceSnapshot, undefined);
+});
