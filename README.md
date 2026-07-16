@@ -129,6 +129,90 @@ Sweep is deterministic, so it never surfaces brain-only semantic findings (e.g.
 a `Total: NaN` that needs a human-style judgement) — it finds what the oracles
 can prove.
 
+## Authenticated roles
+
+By default NightShift explores your app as an anonymous visitor. To cover
+logged-in surfaces, declare **roles** under `target.auth`. On session start
+NightShift logs in once per role, persists a Playwright `storageState` per role
+under the run dir (`.nightshift/<runId>/auth/<role>.json`), and then runs
+exploration, sweep, and journeys **once per role** — every finding is tagged
+with the role that produced it. Anonymous remains the implicit default role and
+always runs; a role whose login fails is skipped with a warning, never
+discarding the anonymous pass.
+
+```json
+"target": {
+  "auth": {
+    "roles": [
+      {
+        "name": "member",
+        "loginUrl": "/login",
+        "usernameEnv": "NIGHTSHIFT_MEMBER_USER",
+        "passwordEnv": "NIGHTSHIFT_MEMBER_PASS",
+        "totpSecretEnv": "NIGHTSHIFT_MEMBER_TOTP",
+        "steps": [
+          { "action": "fill", "selector": "#username", "valueFrom": "username" },
+          { "action": "fill", "selector": "#password", "valueFrom": "password" },
+          { "action": "fill", "selector": "#otp", "valueFrom": "totp" },
+          { "action": "click", "selector": "button[type=submit]" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+- **Credentials never live in config.** `usernameEnv` / `passwordEnv` /
+  `totpSecretEnv` are the **names** of environment variables; NightShift reads
+  the values from your environment at runtime and never stores, logs, or writes
+  them into a finding, repro script, or the report. (Login steps deliberately do
+  not build a replayable trace, so a filled password can't leak downstream.)
+- **`steps`** is a selector-based `fill`/`click`/`goto`/`press`/`select` script.
+  A `fill` uses `valueFrom` (`username` | `password` | `totp`) to inject a
+  secret, or a literal `value` for non-secret fields. `totpSecretEnv` enables
+  RFC 6238 TOTP MFA — NightShift generates the current code at login time.
+- **`setupScript`** is an alternative to `steps`: a path to a module exporting a
+  default `async ({ page, context, env, origin }) => {}` for logins the step DSL
+  can't express (OAuth popups, custom SSO).
+- **`nightshift doctor`** validates auth end to end: every declared credential
+  env var is present, each role actually logs in, and its `storageState` comes
+  back non-empty.
+
+## Journeys (deterministic critical paths)
+
+Exploration is stochastic; **journeys** are the paths you refuse to ship broken.
+A journey is a fixed list of steps run every session with all oracles watching.
+It executes through the same recording/replay path as the explorer, so a failed
+step or an oracle hit becomes an ordinary candidate finding that flows through
+reverify and repro exactly like any other — a confirmed journey bug ships with a
+standalone repro script too.
+
+```json
+"target": {
+  "journeys": [
+    {
+      "name": "checkout completes",
+      "steps": [
+        { "action": "goto", "url": "/cart" },
+        { "action": "click", "selector": "#checkout" },
+        { "action": "fill", "selector": "#card", "value": "4242424242424242" },
+        { "action": "click", "selector": "#place-order", "expect": { "textPresent": "Order confirmed" } }
+      ]
+    }
+  ]
+}
+```
+
+- Each step is `goto` (with `url`) or `click`/`fill`/`select`/`press` (with a CSS
+  `selector` and optional `value`).
+- An optional `expect` asserts `urlIncludes`, `textPresent`, or `textAbsent`
+  (with an optional `selector` to scope the text check). A failed text
+  expectation becomes a text-verified finding; a step that fails to execute, or
+  an oracle that fires mid-journey (page crash, 5xx, dead link), becomes a
+  candidate that reverify can confirm.
+- Journeys run **per role**, so a checkout journey runs under each authenticated
+  role you declared as well as anonymous.
+
 ## Architecture
 
 ```
@@ -177,6 +261,10 @@ default. See [examples/nightshift.config.json](examples/nightshift.config.json).
 - `target.sweep` (default `false`) switches the run into deterministic sweep mode
   (see [Sweep mode](#sweep-mode-deterministic-no-llm)); `--sweep` sets it for one
   run without editing config.
+- `target.auth.roles` (default `[]`) declares authenticated roles to explore in
+  addition to anonymous (see [Authenticated roles](#authenticated-roles)).
+- `target.journeys` (default `[]`) declares deterministic critical paths run
+  every session (see [Journeys](#journeys-deterministic-critical-paths)).
 - Point NightShift only at apps you own or are authorized to test.
 
 ## Current state and limitations
@@ -216,7 +304,7 @@ NightShift is version 0.1.0 and honest about its edges:
 ## Testing
 
 ```bash
-npm test                          # full suite (265 tests)
+npm test                          # full suite (298 tests)
 node --test tests/config.test.mjs # focused module tests
 ```
 
