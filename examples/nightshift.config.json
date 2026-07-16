@@ -1,0 +1,30 @@
+{
+  "target": {
+    "name": "My App",
+    "url": "http://localhost:3000",
+    "routes": ["/"],
+    "maxRoutes": 12,
+    "actionsPerPage": 6,
+    "sweep": false
+  },
+  "brain": {
+    "mode": "subscription-cli",
+    "model": "sonnet",
+    "cliPath": null,
+    "apiKeyEnv": "ANTHROPIC_API_KEY",
+    "apiModel": "claude-sonnet-5",
+    "maxOutputTokens": 2048
+  },
+  "budget": {
+    "maxLlmCalls": 40,
+    "maxMinutes": 45,
+    "maxSessionsPerNight": 4,
+    "stopAtHour": 6
+  },
+  "oracles": {
+    "expectedStatuses": [401, 403],
+    "ignoreConsole": ["ResizeObserver loop", "\\[HMR\\]", "Download the React DevTools"]
+  },
+  "reverify": { "replays": 2, "requiredPasses": 2, "navTimeoutMs": 15000 },
+  "report": { "dir": ".nightshift" }
+}
