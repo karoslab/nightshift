@@ -5,7 +5,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { chromium } from "playwright";
-import { attachOracles } from "../lib/oracles.mjs";
+import { attachOracles, isPrefetchRequest } from "../lib/oracles.mjs";
 
 let browser;
 let server;
@@ -170,6 +170,47 @@ test("request-failed: genuinely failed fetch (connection refused) is signal", as
     assert.equal(errs.length, 1);
     assert.match(errs[0].message, /ERR_CONNECTION_REFUSED/);
     assert.equal(errs[0].detail.requestUrl, "/api/x");
+  });
+});
+
+test("request-failed: prefetch-marked fetch failing as net::ERR_FAILED is excluded", async () => {
+  await withOracles(async (page, { events }) => {
+    await page.route("**/api/prefetched", (route) => route.abort("failed"));
+    await page.evaluate(() =>
+      fetch("/api/prefetched", { headers: { "next-router-prefetch": "1" } }).catch(() => {}),
+    );
+    await page.waitForTimeout(300);
+    assert.equal(ofOracle(events, "request-failed").length, 0);
+  });
+});
+
+test("request-failed: purpose:prefetch header failing as net::ERR_FAILED is excluded", async () => {
+  await withOracles(async (page, { events }) => {
+    await page.route("**/api/prefetched2", (route) => route.abort("failed"));
+    await page.evaluate(() => fetch("/api/prefetched2", { headers: { purpose: "prefetch" } }).catch(() => {}));
+    await page.waitForTimeout(300);
+    assert.equal(ofOracle(events, "request-failed").length, 0);
+  });
+});
+
+test("isPrefetchRequest: recognizes next-router-prefetch, purpose, and sec-purpose markers", () => {
+  const req = (headers) => ({ headers: () => headers });
+  assert.equal(isPrefetchRequest(req({ "next-router-prefetch": "1" })), true);
+  assert.equal(isPrefetchRequest(req({ purpose: "prefetch" })), true);
+  assert.equal(isPrefetchRequest(req({ "sec-purpose": "prefetch" })), true);
+  assert.equal(isPrefetchRequest(req({ "sec-purpose": "prefetch;anonymous-client-ip" })), true);
+  assert.equal(isPrefetchRequest(req({ "content-type": "application/json" })), false);
+  assert.equal(isPrefetchRequest(req({})), false);
+});
+
+test("request-failed: net::ERR_FAILED WITHOUT prefetch headers is still signal", async () => {
+  await withOracles(async (page, { events }) => {
+    await page.route("**/api/notprefetch", (route) => route.abort("failed"));
+    await page.evaluate(() => fetch("/api/notprefetch").catch(() => {}));
+    await eventually(() => ofOracle(events, "request-failed").length >= 1);
+    const errs = ofOracle(events, "request-failed");
+    assert.equal(errs.length, 1);
+    assert.match(errs[0].message, /ERR_FAILED/);
   });
 });
 

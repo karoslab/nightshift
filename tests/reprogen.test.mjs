@@ -12,11 +12,14 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { generateReproScript } from "../lib/reprogen.mjs";
 import { buildSignature, signaturesMatch } from "../lib/signature.mjs";
+import { isPrefetchRequest } from "../lib/oracles.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 // Sentinels pinned in lib/reprogen.mjs around the embedded signature functions.
 const EMBED_BEGIN = "// --- begin embedded lib/signature.mjs (do not edit; parity-tested) ---";
 const EMBED_END = "// --- end embedded lib/signature.mjs ---";
+const EMBED_PREFETCH_BEGIN = "// --- begin embedded lib/oracles.mjs isPrefetchRequest (do not edit; parity-tested) ---";
+const EMBED_PREFETCH_END = "// --- end embedded lib/oracles.mjs isPrefetchRequest ---";
 
 const CONFIG = {
   target: { name: "Test", url: "http://127.0.0.1:9999", routes: ["/"] },
@@ -141,6 +144,35 @@ test("parity: embedded normalizer output is byte-identical to lib/signature.mjs"
     );
   }
   assert.equal(embedded.signaturesMatch("a", "b"), false);
+});
+
+test("parity: embedded isPrefetchRequest is byte-identical to lib/oracles.mjs and wired into the requestfailed handler", () => {
+  const script = generateReproScript(oracleFinding(), CONFIG);
+  const start = script.indexOf(EMBED_PREFETCH_BEGIN);
+  const end = script.indexOf(EMBED_PREFETCH_END);
+  assert.ok(start !== -1 && end > start, "isPrefetchRequest embed sentinels present in generated script");
+  const embeddedSrc = script.slice(start + EMBED_PREFETCH_BEGIN.length, end);
+  const embedded = new Function(embeddedSrc + "; return isPrefetchRequest;")();
+
+  const req = (headers) => ({ headers: () => headers });
+  const table = [
+    { "next-router-prefetch": "1" },
+    { purpose: "prefetch" },
+    { "sec-purpose": "prefetch" },
+    { "sec-purpose": "prefetch;anonymous-client-ip" },
+    { "content-type": "application/json" },
+    {},
+  ];
+  for (const headers of table) {
+    assert.equal(embedded(req(headers)), isPrefetchRequest(req(headers)), "diverged for " + JSON.stringify(headers));
+  }
+
+  // wired into the handler: a non-navigation fetch/xhr failure that is
+  // prefetch-marked must be dropped before push("request-failed", ...).
+  const rfStart = script.indexOf('context.on("requestfailed"');
+  const rfEnd = script.indexOf("});", rfStart);
+  const handlerBlock = script.slice(rfStart, rfEnd);
+  assert.match(handlerBlock, /if \(isPrefetchRequest\(request\)\) return;/);
 });
 
 test("generateReproScript rejects findings it cannot assert", () => {
