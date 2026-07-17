@@ -22,11 +22,16 @@ usage: nightshift <command> [options]
 commands:
   init                       write nightshift.config.json into the current directory
   doctor [--config path]     check config, target reachability, brain auth, browser
-  run [--config path] [--brain mock] [--sweep] [--resume <runId>]
+  run [--config path] [--brain mock] [--sweep] [--resume <runId>] [--update-baselines]
                              one QA session -> reverify candidates -> report
                              --sweep: deterministic exhaustive crawl (no LLM);
-                             --resume: continue an interrupted sweep run dir
+                             --resume: continue an interrupted sweep run dir;
+                             --update-baselines: re-seed the expected-element
+                             baselines from this run (for a deliberate redesign)
   overnight [--config path]  sessions in a loop within budget until stop hour
+  baseline accept <findingId> [--run <runId>] [--config path]
+                             accept an expected-element disappearance as intended
+                             (drops it from the baseline; records who/when)
   verify <findingId> [--run <runId>] [--config path]
                              replay one finding from an existing report
   console [--port 4184] [--config path]
@@ -306,6 +311,9 @@ async function resolveRunDir(config, flags) {
 async function cmdRun(flags) {
   const config = loadConfig(flags.config);
   if (flags.sweep) config.target.sweep = true;
+  // The expected-element census runs during a sweep; --update-baselines implies
+  // sweep so re-seeding never silently no-ops in LLM-session mode.
+  if (flags["update-baselines"]) config.target.sweep = true;
 
   // Sweep mode is deterministic and LLM-free — it never constructs a brain
   // (skipping subscription/api auth and the mock-brain Bugbox guard entirely).
@@ -341,8 +349,9 @@ async function cmdRun(flags) {
 async function cmdRunSweep(config, flags) {
   const { runSweep } = await import("../lib/sweep.mjs");
   const { runDir } = await resolveRunDir(config, flags);
-  log("info", `run: starting deterministic sweep against ${config.target.url}${flags.resume ? " (resume)" : ""}`);
-  const { findings, stats } = await runSweep({ config, runDir, log });
+  const updateBaselines = flags["update-baselines"] === true;
+  log("info", `run: starting deterministic sweep against ${config.target.url}${flags.resume ? " (resume)" : ""}${updateBaselines ? " (--update-baselines)" : ""}`);
+  const { findings, stats } = await runSweep({ config, runDir, log, updateBaselines });
   log(
     "info",
     `run: sweep done — ${findings.length} candidate(s), ${stats.coverage?.totals?.coveragePct ?? 0}% element coverage, reverifying`,
@@ -441,6 +450,43 @@ async function cmdVerify(flags, positionals) {
   console.log(`${verified.id}: ${verified.status} (${rv.reproduced ?? "?"}/${rv.replays ?? "?"} replays reproduced)`);
   if (Array.isArray(rv.verdicts)) console.log(`verdicts: ${rv.verdicts.join(", ")}`);
   process.exitCode = verified.status === "confirmed" || verified.status === "text-verified" ? 0 : 1;
+}
+
+// `nightshift baseline accept <findingId>`: mark an expected-element
+// disappearance as intended. Reads the finding from a report, drops that
+// element from the stored baseline, and records who accepted it and when.
+async function cmdBaseline(flags, positionals) {
+  const [sub, findingId] = positionals;
+  if (sub !== "accept" || !findingId) {
+    console.error("usage: nightshift baseline accept <findingId> [--run <runId>] [--config path]");
+    process.exitCode = 2;
+    return;
+  }
+  const config = loadConfig(flags.config);
+  const reportDir = path.resolve(config.report.dir);
+  const runId = flags.run ?? (await readLatestRunId(reportDir));
+  if (!runId) throw new Error(`no runs found in ${reportDir} — run \`nightshift run --sweep\` first`);
+
+  const reportPath = path.join(reportDir, String(runId), "report.json");
+  const report = JSON.parse(await fs.readFile(reportPath, "utf8"));
+  const finding = (Array.isArray(report.findings) ? report.findings : []).find((f) => f.id === findingId);
+  if (!finding) throw new Error(`finding ${findingId} not found in ${reportPath}`);
+  if (finding.source !== "oracle:expected-element" || !finding.census) {
+    throw new Error(`finding ${findingId} is not an expected-element finding — nothing to accept`);
+  }
+
+  const { baselinesDir, acceptFinding } = await import("../lib/baseline.mjs");
+  const who = process.env.SUDO_USER || process.env.USER || os.userInfo().username || "unknown";
+  const result = acceptFinding({ dir: baselinesDir(config), finding, who });
+  if (!result.accepted) {
+    console.error(`baseline accept: ${result.reason}`);
+    process.exitCode = 1;
+    return;
+  }
+  const el = finding.census.element;
+  console.log(
+    `accepted ${findingId}: dropped ${el.role ?? el.tag} "${el.name}" at ${finding.census.viewport.name} from the baseline (by ${who}).`,
+  );
 }
 
 async function cmdConsole(flags) {
@@ -559,6 +605,8 @@ async function main(argv) {
         return await cmdRun(flags);
       case "overnight":
         return await cmdOvernight(flags);
+      case "baseline":
+        return await cmdBaseline(flags, positionals);
       case "verify":
         return await cmdVerify(flags, positionals);
       case "console":

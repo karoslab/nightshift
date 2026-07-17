@@ -129,6 +129,74 @@ Sweep is deterministic, so it never surfaces brain-only semantic findings (e.g.
 a `Total: NaN` that needs a human-style judgement) — it finds what the oracles
 can prove.
 
+## Expected-element oracle (disappearance detection)
+
+Every other oracle catches a failure that *fires* — a console error, a 4xx/5xx,
+a crash. None of them notices an element that silently *disappears*: a control
+that becomes hidden or unreachable produces no error at all. The canonical case
+is a responsive CSS regression — a search icon that reorders to `display:none`
+between 640–900px is gone on tablets, yet a "100% element coverage" sweep still
+reports clean because it can only count elements it *found*, not ones that
+should have been found and weren't.
+
+The expected-element oracle closes that gap with a **structural element
+census**. During a sweep, for each visited route it re-enumerates the
+interactive elements (the same enumeration the sweep uses — no fork) at three
+viewport classes — **mobile 375×812, tablet 760×1024, desktop 1280×800** — and
+records a normalized signature per element: its role/tag, accessible name (with
+dynamic text like digits and dates collapsed to a `#` placeholder so counters
+and timestamps don't churn), a stable selector path, and visibility. The extra
+widths are enumeration only — one resize + read per class, no actions, no LLM
+calls.
+
+Those signatures are stored as a **baseline** under
+`<report.dir>/baselines/<route-key>.json` (with a `meta.json` recording
+created-at, run id, and a config hash). The **first** enabled run seeds the
+baseline and reports nothing. On later runs, a baseline element that is now
+missing or computed-invisible at its viewport class becomes an
+`expected-element` finding (severity **major**). It goes through the same
+LLM-free reverify as any other finding — two independent replays that re-open a
+fresh context, navigate, resize, and re-enumerate; still gone on both →
+**confirmed** — and it gets a standalone repro script that **exits 0 while the
+element is missing/invisible and non-zero once it is restored**.
+
+Enable it per target (off by default):
+
+```json
+"oracles": {
+  "expectedElements": {
+    "enabled": true,
+    "ignoreSelectors": ["#chat-widget", ".ad-slot"]
+  }
+}
+```
+
+Baseline lifecycle:
+
+- **New elements** that appear in a run but not the baseline are **added
+  automatically** — growth is never a regression.
+- A route **not visited** this run leaves its baseline untouched (crawl-order
+  variance never manufactures a disappearance).
+- When a removal is **intentional**, accept it:
+  `node bin/nightshift.mjs baseline accept <finding-id>` drops that element from
+  the baseline and records who/when in `meta.json`.
+- For a **deliberate redesign**, re-seed everything:
+  `node bin/nightshift.mjs run --sweep --update-baselines`.
+- Changing the `ignoreSelectors` (or the viewport set) changes the config hash
+  and re-seeds automatically, rather than reporting every element as vanished.
+
+**What it is, honestly.** This is a *structural, textual* census — it compares
+which interactive elements are enumerable and visible, class by class. It is
+**not pixel diffing**: no screenshots are compared, no perceptual thresholds, no
+flaky image baselines. Because it is structural it **cannot** catch things that
+leave the element enumerable and visible: overlap or crowding, wrong colors or
+fonts, off-screen-but-present controls, z-index/tap-target problems, content
+that is present but wrong, or an element that renders differently only between
+the three sampled widths. It reliably catches the disappearance class —
+elements that drop out of the DOM or compute to `display:none`/`visibility:hidden`/
+zero-size — and it tracks elements by a normalized accessible name, so a control
+whose name is *entirely* dynamic can be harder to follow across runs.
+
 ## Authenticated roles
 
 By default NightShift explores your app as an anonymous visitor. To cover

@@ -148,6 +148,33 @@ const PAGE_LOGIN = `<!doctype html>
 </body>
 </html>`;
 
+// Responsive fixture for the expected-element census oracle. The "Search"
+// control is visible at every width by default; when hideTabletControl is set
+// it computes to display:none in the 640–900px band (the short4movies PR #29
+// case) — so it drops out of enumeration at the tablet class (760px) only,
+// while mobile (375) and desktop (1280) still see it. Not linked from any other
+// page, so it never perturbs the pinned home/about crawl.
+function pageResponsive(hideTabletControl) {
+  const hideRule = hideTabletControl
+    ? "@media (min-width: 640px) and (max-width: 900px) { #search-btn { display: none; } }"
+    : "";
+  return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Responsive — Bugbox</title><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>${STYLE}${hideRule}</style></head>
+<body>
+<nav><a href="/">Home</a></nav>
+<h1>Store tools</h1>
+<div class="toolbar">
+  <button id="search-btn">Search</button>
+  <button id="menu-btn">Menu</button>
+  <a href="/about" id="help-link">Help</a>
+</div>
+<p><input id="query" name="query" placeholder="Find products"></p>
+</body>
+</html>`;
+}
+
 const PAGE_ACCOUNT = `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Your account — Bugbox</title><style>${STYLE}</style></head>
@@ -176,12 +203,13 @@ function isAuthed(req) {
   return cookie.split(/;\s*/).includes(AUTH_COOKIE);
 }
 
-async function handleRequest(req, res) {
+async function handleRequest(req, res, state = {}) {
   const send = (status, contentType, body) => {
     res.writeHead(status, { "Content-Type": contentType });
     res.end(body);
   };
   const { pathname } = new URL(req.url, "http://127.0.0.1");
+  if (pathname === "/responsive") return send(200, "text/html; charset=utf-8", pageResponsive(state.hideTabletControl === true));
   if (pathname === "/login") return send(200, "text/html; charset=utf-8", PAGE_LOGIN);
   if (pathname === "/api/login") {
     if (req.method !== "POST") {
@@ -226,9 +254,12 @@ async function handleRequest(req, res) {
   return send(404, "text/html; charset=utf-8", PAGE_404);
 }
 
-export function startBugbox(port = DEFAULT_PORT) {
+// `state` is a live, mutable object (default { hideTabletControl: false }) read
+// per request — tests flip state.hideTabletControl between runs to simulate a
+// responsive CSS regression landing while the server stays on one port.
+export function startBugbox(port = DEFAULT_PORT, state = {}) {
   const server = http.createServer((req, res) => {
-    handleRequest(req, res).catch(() => {
+    handleRequest(req, res, state).catch(() => {
       try {
         if (!res.headersSent) res.writeHead(500);
         res.end();

@@ -37,6 +37,7 @@ const PINNED_DEFAULTS = {
   oracles: {
     expectedStatuses: [401, 403],
     ignoreConsole: ["ResizeObserver loop", "\\[HMR\\]", "Download the React DevTools"],
+    expectedElements: { enabled: false, ignoreSelectors: [] },
   },
   reverify: { replays: 2, requiredPasses: 2, navTimeoutMs: 15000 },
   report: { dir: ".nightshift" },
@@ -187,6 +188,35 @@ test("oracles validation: statuses are integers, ignoreConsole patterns compile"
   assertConfigError(
     () => loadConfig(writeConfig(tmpDir(), { oracles: { ignoreConsole: [42] } })),
     /ignoreConsole/
+  );
+});
+
+test("oracles.expectedElements: defaults off, enabled must be boolean, ignoreSelectors valid CSS", () => {
+  // Default is off with an empty ignore list.
+  const dflt = loadConfig(writeConfig(tmpDir(), {}));
+  assert.equal(dflt.oracles.expectedElements.enabled, false);
+  assert.deepEqual(dflt.oracles.expectedElements.ignoreSelectors, []);
+
+  // A valid opt-in merges through and keeps the defaults for unset keys.
+  const ok = loadConfig(writeConfig(tmpDir(), { oracles: { expectedElements: { enabled: true, ignoreSelectors: ["#chat-widget"] } } }));
+  assert.equal(ok.oracles.expectedElements.enabled, true);
+  assert.deepEqual(ok.oracles.expectedElements.ignoreSelectors, ["#chat-widget"]);
+
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { oracles: { expectedElements: { enabled: "yes" } } })),
+    /expectedElements\.enabled/
+  );
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { oracles: { expectedElements: { ignoreSelectors: "#x" } } })),
+    /expectedElements\.ignoreSelectors/
+  );
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { oracles: { expectedElements: { ignoreSelectors: ["a[unclosed"] } } })),
+    /expectedElements\.ignoreSelectors/
+  );
+  assertConfigError(
+    () => loadConfig(writeConfig(tmpDir(), { oracles: { expectedElements: null } })),
+    /expectedElements/
   );
 });
 

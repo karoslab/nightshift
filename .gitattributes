@@ -1,0 +1,6 @@
+# Workshop/storefront split: internal planning docs must never reach the public
+# storefront, which is published via `git archive`. export-ignore drops these
+# from archive output while keeping them in the private dev mirror.
+PRD-*.md export-ignore
+PLAN-*.md export-ignore
+UNDERSTOOD-*.md export-ignore

@@ -57,7 +57,11 @@
   },
   "oracles": {
     "expectedStatuses": [401, 403],
-    "ignoreConsole": ["ResizeObserver loop", "\\[HMR\\]", "Download the React DevTools"]
+    "ignoreConsole": ["ResizeObserver loop", "\\[HMR\\]", "Download the React DevTools"],
+    "expectedElements": {
+      "enabled": false,
+      "ignoreSelectors": []
+    }
   },
   "reverify": { "replays": 2, "requiredPasses": 2, "navTimeoutMs": 15000 },
   "report": { "dir": ".nightshift" }
